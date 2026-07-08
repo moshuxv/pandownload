@@ -406,39 +406,63 @@
     updatePanel();
   }
 
-  // ========== 获取 bdstoken（百度网盘 CSRF 令牌） ==========
-  function getBdstoken() {
-    // 从页面上下文中获取 bdstoken
-    // 1. yunData 全局变量
-    try {
-      if (typeof yunData !== 'undefined' && yunData && yunData.MYBDSTOKEN) {
-        return yunData.MYBDSTOKEN;
-      }
-    } catch (e) {}
-    // 2. document.cookie
-    const match = document.cookie.match(/BDSTOKEN=([^;]+)/);
-    if (match) return match[1];
-    // 3. 页面 HTML 中的 meta 标签
-    const meta = document.querySelector('meta[name="bdstoken"]');
-    if (meta) return meta.content;
-    // 4. localStorage
-    try {
-      return localStorage.getItem('bdstoken') || '';
-    } catch (e) {}
-    return '';
-  }
+  // ========== 注入脚本到页面主世界，调用百度网盘API获取下载直链 ==========
+  function getDlinkFromPage(fs_id) {
+    return new Promise((resolve) => {
+      const key = '__pdf_dl_' + Date.now();
 
-  // ========== 获取 logid（百度网盘请求追踪ID） ==========
-  function getLogid() {
-    try {
-      if (typeof yunData !== 'undefined' && yunData && yunData.LOGID) {
-        return yunData.LOGID;
-      }
-    } catch (e) {}
-    // 随机生成一个，格式类似
-    const arr = new Uint32Array(1);
-    crypto.getRandomValues(arr);
-    return String(arr[0]);
+      const script = document.createElement('script');
+      script.textContent = `
+        (async function() {
+          try {
+            var bd = yunData.MYBDSTOKEN;
+            var sign = (yunData.sign1 || '') + '_' + (yunData.sign3 || '');
+            var ts = Math.floor(Date.now() / 1000);
+            var logid = yunData.LOGID || '';
+            var u;
+
+            // 方法1: download API
+            u = 'https://pan.baidu.com/api/download?app_id=250528&channel=chunlei&clienttype=0&web=1&bdstoken=' + bd + '&fs_id=${fs_id}&sign=' + encodeURIComponent(sign) + '&timestamp=' + ts + '&logid=' + logid;
+            var r = await fetch(u, { credentials: 'include' });
+            var d = await r.json();
+            if (d.errno === 0 && d.dlink) {
+              window['${key}'] = d.dlink;
+              return;
+            }
+
+            // 方法2: filemetas API
+            var r2 = await fetch('https://pan.baidu.com/api/filemetas?fsids=[${fs_id}]&dlink=1&web=1&bdstoken=' + bd, { credentials: 'include' });
+            var d2 = await r2.json();
+            if (d2.errno === 0 && d2.info && d2.info[0] && d2.info[0].dlink) {
+              window['${key}'] = d2.info[0].dlink;
+              return;
+            }
+
+            window['${key}'] = '';
+          } catch(e) {
+            window['${key}'] = '';
+          }
+        })();
+      `;
+      document.documentElement.appendChild(script);
+
+      let elapsed = 0;
+      const timer = setInterval(() => {
+        elapsed += 100;
+        if (window[key] !== undefined) {
+          clearInterval(timer);
+          const val = window[key];
+          delete window[key];
+          script.remove();
+          resolve(val || '');
+        } else if (elapsed >= 10000) {
+          clearInterval(timer);
+          delete window[key];
+          script.remove();
+          resolve('');
+        }
+      }, 100);
+    });
   }
 
   // ========== 下载单个PDF文件 ==========
@@ -448,127 +472,45 @@
     STATE.pdfCurrentName = relPath ? `${relPath}/${shortName}` : shortName;
     updatePanel();
 
-    const bdstoken = getBdstoken();
-    if (!bdstoken) {
-      log(`❌ PDF下载失败: 无法获取bdstoken - ${name}`);
-      return false;
-    }
-
     try {
-      // 方法1: 调用百度网盘 filemetas API 获取下载链接
-      const metaUrl = `https://pan.baidu.com/api/filemetas?fsids=[${fs_id}]&dlink=1&web=1&bdstoken=${bdstoken}&channel=chunlei&clienttype=0&app_id=250528`;
-      const metaResp = await fetch(metaUrl);
-      const metaData = await metaResp.json();
-
-      let dlink = '';
-      if (metaData.errno === 0 && metaData.info && metaData.info[0]) {
-        dlink = metaData.info[0].dlink || '';
-      }
-
-      // 方法2: 如果 filemetas 没有返回 dlink，尝试 download API
-      if (!dlink) {
-        log(`  方法1无dlink，尝试download API...`);
-        const timestamp = Math.floor(Date.now() / 1000);
-        const sign = await computeDownloadSign(fs_id, timestamp, bdstoken);
-        const logid = getLogid();
-        const dlUrl = `https://pan.baidu.com/api/download?fs_id=${fs_id}&timestamp=${timestamp}&sign=${sign}&bdstoken=${bdstoken}&channel=chunlei&clienttype=0&web=1&app_id=250528&logid=${logid}`;
-        const dlResp = await fetch(dlUrl);
-        const dlData = await dlResp.json();
-        if (dlData.errno === 0 && dlData.dlink) {
-          dlink = dlData.dlink;
-        } else {
-          log(`  方法2失败: errno=${dlData.errno} errmsg=${dlData.errmsg || ''}`);
-        }
-      }
+      // 注入脚本到页面主世界，拿token+调API+返回直链
+      const dlink = await getDlinkFromPage(fs_id);
 
       if (!dlink) {
-        log(`❌ PDF下载失败: 无法获取下载链接 - ${name}`);
+        log(`❌ ${name} - 无法获取下载链接`);
         return false;
       }
 
       // 构建下载路径（保持文件夹结构）
-      let downloadPath = '';
-      if (relPath) {
-        const safeDir = relPath.split('/').map(s => s.replace(/[<>:"/\\|?*]/g, '_')).join('/');
-        downloadPath = safeDir + '/';
-      }
-      const safeName = name.replace(/[<>:"/\\|?*]/g, '_');
-      downloadPath += safeName;
+      let filename = relPath
+        ? relPath.split('/').map(s => s.replace(/[<>:"/\\|?*]/g, '_')).join('/') + '/'
+        : '';
+      filename += name.replace(/[<>:"/\\|?*]/g, '_');
 
-      // 发送到 background 执行下载
+      // 发送到background触发下载
       return new Promise((resolve) => {
         chrome.runtime.sendMessage(
-          { action: 'downloadFile', url: dlink, filename: downloadPath },
+          { action: 'downloadFile', url: dlink, filename },
           (response) => {
             if (chrome.runtime.lastError) {
-              log(`❌ 下载消息发送失败: ${chrome.runtime.lastError.message}`);
+              log(`❌ ${shortName} - ${chrome.runtime.lastError.message}`);
               resolve(false);
               return;
             }
-            if (response && response.ok) {
-              log(`✅ PDF已下载: ${downloadPath}`);
+            if (response?.ok) {
+              log(`✅ ${filename}`);
               resolve(true);
             } else {
-              log(`❌ PDF下载失败: ${response?.error || '未知错误'} - ${name}`);
+              log(`❌ ${shortName} - ${response?.error || '下载失败'}`);
               resolve(false);
             }
           }
         );
       });
     } catch (e) {
-      log(`❌ PDF下载异常: ${e.message} - ${name}`);
+      log(`❌ ${shortName} - ${e.message}`);
       return false;
     }
-  }
-
-  // ========== 计算下载签名 ==========
-  async function computeDownloadSign(fs_id, timestamp, bdstoken) {
-    // 尝试从页面获取签名种子
-    try {
-      // 方法a: 使用页面上下文中的 sign 函数
-      const signResult = await new Promise((resolve) => {
-        const scriptId = '__pdf_sign_helper__';
-        // 清理旧脚本
-        const old = document.getElementById(scriptId);
-        if (old) old.remove();
-
-        const script = document.createElement('script');
-        script.id = scriptId;
-        script.textContent = `
-          (function() {
-            try {
-              var signVal = '';
-              // 尝试调用页面的签名函数
-              if (typeof yunData !== 'undefined') {
-                var sign1 = yunData.sign1 || '';
-                var sign3 = yunData.sign3 || '';
-                signVal = sign1 + '_' + sign3;
-              }
-              window.__pdf_sign_result = signVal;
-            } catch(e) {
-              window.__pdf_sign_result = '';
-            }
-          })();
-        `;
-        document.documentElement.appendChild(script);
-        setTimeout(() => {
-          const val = window.__pdf_sign_result || '';
-          delete window.__pdf_sign_result;
-          script.remove();
-          resolve(val);
-        }, 200);
-      });
-
-      if (signResult) {
-        return signResult;
-      }
-    } catch (e) {
-      // 忽略
-    }
-
-    // 方法b: 用简单方式生成（可能不适用于所有情况）
-    // 注意：这只是一个近似值，可能需要页面实际的签名逻辑
-    return bdstoken + '_' + timestamp;
   }
 
   // ========== 批量下载PDF（限制并发数，避免触发反爬） ==========
