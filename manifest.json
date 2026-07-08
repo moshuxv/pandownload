@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "百度网盘字幕自动导出",
+  "version": "3.0.0",
+  "description": "百度网盘字幕自动导出 + PDF批量下载。自动导出视频文稿字幕，递归扫描目录批量下载PDF文件，保持原文件夹结构。",
+  "permissions": ["tabs", "scripting", "storage", "downloads"],
+  "host_permissions": ["https://pan.baidu.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://pan.baidu.com/pfile/video*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://pan.baidu.com/disk/main*"],
+      "js": ["content_dir.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

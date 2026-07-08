@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 320px;
+      padding: 16px;
+      font-family: -apple-system, "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+      color: #333;
+    }
+    h2 {
+      margin: 0 0 12px 0;
+      font-size: 16px;
+      color: #1a73e8;
+    }
+    .status {
+      padding: 8px 12px;
+      background: #f0f4ff;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .tip {
+      font-size: 12px;
+      color: #666;
+      line-height: 1.6;
+    }
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .toggle input {
+      width: 16px;
+      height: 16px;
+    }
+    label {
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h2>📝 百度网盘字幕自动导出</h2>
+  <div class="status" id="status">✅ 已启用自动导出</div>
+  <div class="toggle">
+    <input type="checkbox" id="enableToggle" checked>
+    <label for="enableToggle">启用单页自动导出</label>
+  </div>
+  <div class="toggle">
+    <input type="checkbox" id="batchToggle" checked>
+    <label for="batchToggle">启用目录页批量控制面板</label>
+  </div>
+  <div class="toggle">
+    <input type="checkbox" id="pdfToggle" checked>
+    <label for="pdfToggle">启用PDF自动扫描下载</label>
+  </div>
+  <div class="tip">
+    <p><b>使用方法：</b></p>
+    <p>1. 进入含视频/PDF的百度网盘目录页</p>
+    <p>2. 点击右上角面板的"开始递归导出"按钮</p>
+    <p>3. 扩展自动打开视频页→点击"文稿"→提取文本→下载→关闭</p>
+    <p>4. 每个目录最多同时开5个标签页，有完成的自动补上</p>
+    <p>5. 失败会自动刷新重试，成功自动关闭</p>
+    <p>6. 点击"下载全部PDF"→自动下载PDF文件（保持原目录结构）</p>
+    <p>7. 导出文件保存到浏览器默认下载目录</p>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
