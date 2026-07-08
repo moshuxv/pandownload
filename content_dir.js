@@ -406,10 +406,11 @@
     updatePanel();
   }
 
-  // ========== 注入脚本到页面主世界，调用百度网盘API获取下载直链 ==========
-  function getDlinkFromPage(fs_id) {
+  // ========== 注入脚本到页面主世界：拿token + 调API + 触发浏览器原生下载 ==========
+  // 不走 background.js，就像在网页上点下载按钮一样
+  function triggerPDFDownload(fs_id) {
     return new Promise((resolve) => {
-      const key = '__pdf_dl_' + Date.now();
+      const key = '__pdf_r_' + Date.now();
 
       const script = document.createElement('script');
       script.textContent = `
@@ -419,28 +420,37 @@
             var sign = (yunData.sign1 || '') + '_' + (yunData.sign3 || '');
             var ts = Math.floor(Date.now() / 1000);
             var logid = yunData.LOGID || '';
-            var u;
+            var dlink = '';
+            var errmsg = '';
 
             // 方法1: download API
-            u = 'https://pan.baidu.com/api/download?app_id=250528&channel=chunlei&clienttype=0&web=1&bdstoken=' + bd + '&fs_id=${fs_id}&sign=' + encodeURIComponent(sign) + '&timestamp=' + ts + '&logid=' + logid;
-            var r = await fetch(u, { credentials: 'include' });
-            var d = await r.json();
-            if (d.errno === 0 && d.dlink) {
-              window['${key}'] = d.dlink;
-              return;
+            var u1 = 'https://pan.baidu.com/api/download?app_id=250528&channel=chunlei&clienttype=0&web=1&bdstoken=' + bd + '&fs_id=${fs_id}&sign=' + encodeURIComponent(sign) + '&timestamp=' + ts + '&logid=' + logid;
+            var r1 = await fetch(u1, { credentials: 'include' });
+            var d1 = await r1.json();
+            if (d1.errno === 0 && d1.dlink) { dlink = d1.dlink; }
+            else { errmsg = 'errno=' + d1.errno; }
+
+            // 方法2: filemetas 备用
+            if (!dlink) {
+              var r2 = await fetch('https://pan.baidu.com/api/filemetas?fsids=[${fs_id}]&dlink=1&web=1&bdstoken=' + bd, { credentials: 'include' });
+              var d2 = await r2.json();
+              if (d2.errno === 0 && d2.info && d2.info[0] && d2.info[0].dlink) { dlink = d2.info[0].dlink; }
+              else { errmsg += ' | meta_errno=' + d2.errno; }
             }
 
-            // 方法2: filemetas API
-            var r2 = await fetch('https://pan.baidu.com/api/filemetas?fsids=[${fs_id}]&dlink=1&web=1&bdstoken=' + bd, { credentials: 'include' });
-            var d2 = await r2.json();
-            if (d2.errno === 0 && d2.info && d2.info[0] && d2.info[0].dlink) {
-              window['${key}'] = d2.info[0].dlink;
-              return;
+            if (dlink) {
+              // 触发浏览器原生下载 — 用隐藏iframe加载直链
+              var ifr = document.createElement('iframe');
+              ifr.style.cssText = 'display:none;width:0;height:0;border:0;';
+              ifr.src = dlink;
+              document.body.appendChild(ifr);
+              setTimeout(function() { ifr.remove(); }, 15000);
+              window['${key}'] = 'ok';
+            } else {
+              window['${key}'] = 'fail:' + errmsg;
             }
-
-            window['${key}'] = '';
           } catch(e) {
-            window['${key}'] = '';
+            window['${key}'] = 'fail:' + e.message;
           }
         })();
       `;
@@ -454,63 +464,29 @@
           const val = window[key];
           delete window[key];
           script.remove();
-          resolve(val || '');
-        } else if (elapsed >= 10000) {
+          if (val === 'ok') { resolve(true); }
+          else { log('  详情: ' + val); resolve(false); }
+        } else if (elapsed >= 15000) {
           clearInterval(timer);
           delete window[key];
           script.remove();
-          resolve('');
+          resolve(false);
         }
       }, 100);
     });
   }
 
-  // ========== 下载单个PDF文件 ==========
+  // ========== 下载单个PDF ==========
   async function downloadSinglePDF(pdfInfo) {
     const { name, fs_id, relPath } = pdfInfo;
-    const shortName = name.length > 50 ? name.substring(0, 47) + '...' : name;
-    STATE.pdfCurrentName = relPath ? `${relPath}/${shortName}` : shortName;
+    const displayName = relPath ? relPath + '/' + name : name;
+    STATE.pdfCurrentName = displayName.length > 55 ? displayName.substring(0, 52) + '...' : displayName;
     updatePanel();
 
-    try {
-      // 注入脚本到页面主世界，拿token+调API+返回直链
-      const dlink = await getDlinkFromPage(fs_id);
-
-      if (!dlink) {
-        log(`❌ ${name} - 无法获取下载链接`);
-        return false;
-      }
-
-      // 构建下载路径（保持文件夹结构）
-      let filename = relPath
-        ? relPath.split('/').map(s => s.replace(/[<>:"/\\|?*]/g, '_')).join('/') + '/'
-        : '';
-      filename += name.replace(/[<>:"/\\|?*]/g, '_');
-
-      // 发送到background触发下载
-      return new Promise((resolve) => {
-        chrome.runtime.sendMessage(
-          { action: 'downloadFile', url: dlink, filename },
-          (response) => {
-            if (chrome.runtime.lastError) {
-              log(`❌ ${shortName} - ${chrome.runtime.lastError.message}`);
-              resolve(false);
-              return;
-            }
-            if (response?.ok) {
-              log(`✅ ${filename}`);
-              resolve(true);
-            } else {
-              log(`❌ ${shortName} - ${response?.error || '下载失败'}`);
-              resolve(false);
-            }
-          }
-        );
-      });
-    } catch (e) {
-      log(`❌ ${shortName} - ${e.message}`);
-      return false;
-    }
+    const ok = await triggerPDFDownload(fs_id);
+    STATE.pdfCurrentName = '';
+    log((ok ? '✅ ' : '❌ ') + displayName);
+    return ok;
   }
 
   // ========== 批量下载PDF（限制并发数，避免触发反爬） ==========
