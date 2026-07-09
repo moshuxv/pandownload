@@ -86,10 +86,10 @@
       font-family: -apple-system, "Microsoft YaHei", sans-serif;
       box-shadow: 0 6px 20px rgba(0,0,0,0.5);
       width: 420px;
-      height: 580px;
+      height: 480px;
       max-height: none;
       overflow: hidden;
-      line-height: 1.6;
+      line-height: 1.5;
     `;
 
     // 内层容器：可滚动
@@ -97,7 +97,7 @@
       panelInner = document.createElement('div');
       panelInner.style.cssText = `
         height: 100%;
-        padding: 14px 16px;
+        padding: 10px 12px;
         overflow-y: auto;
         overflow-x: hidden;
         box-sizing: border-box;
@@ -138,8 +138,8 @@
       : (hasScanned ? '🔄 重新扫描' : '🔍 扫描目录');
     const scanBtnColor = STATE.scanning ? '#7f8c8d' : '#3498db';
     const scanInfo = STATE.scanning
-      ? `<div style="margin-top:4px;font-size:12px;opacity:0.8;color:#f39c12;">🔄 ${STATE.scanProgress}</div>`
-      : '';
+      ? `<div style="height:18px;margin-top:3px;font-size:11px;opacity:0.8;color:#f39c12;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">🔄 ${STATE.scanProgress}</div>`
+      : `<div style="height:21px;margin-top:3px;"></div>`;
 
     // ===== 视频字幕导出按钮 =====
     const videoTotal = STATE.videos.length;
@@ -187,7 +187,7 @@
 
     // ===== 组装HTML =====
     let html = '';
-    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">`;
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">`;
     html += `<span style="font-weight:bold;font-size:15px;">📂 批量处理</span>`;
     html += `<button id="__batch_toggle_collapse__" style="
       background:rgba(255,255,255,0.15);color:#fff;border:none;padding:2px 8px;
@@ -203,21 +203,21 @@
       html += `🎬 ${STATE.totalDone}/${vc} &nbsp; 📄 ${STATE.docsDone}/${dc}`;
       html += `</div>`;
       panelInner.innerHTML = html;
-      panelEl.style.height = '56px';
+      panelEl.style.height = '50px';
       const collapseBtn = panelInner.querySelector('#__batch_toggle_collapse__');
       if (collapseBtn) collapseBtn.addEventListener('click', () => {
         STATE.collapsed = false;
-        panelEl.style.height = '580px';
+        panelEl.style.height = '480px';
         updatePanel();
       });
       return;
     }
 
     // 展开时恢复正常高度
-    panelEl.style.height = '580px';
+    panelEl.style.height = '480px';
 
     // 扫描按钮行
-    html += `<div style="margin-bottom:10px;">`;
+    html += `<div style="margin-bottom:6px;">`;
     html += `<button id="__batch_scan_btn__" style="
       background:${scanBtnColor};color:#fff;border:none;padding:6px 14px;
       border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;
@@ -231,10 +231,10 @@
 
     // ===== 两个操作按钮（扫描完成后才显示）=====
     if (hasScanned) {
-      html += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px;">`;
+      html += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:6px 0;padding-top:6px;">`;
 
       // ===== 视频字幕导出区域 =====
-      html += `<div style="margin-bottom:10px;">`;
+      html += `<div style="margin-bottom:6px;">`;
       html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">`;
       html += `<span style="font-weight:bold;">🎬 视频字幕</span>`;
       html += `<span style="font-size:12px;opacity:0.7;">${videoTotal} 个视频</span>`;
@@ -242,7 +242,7 @@
 
       // 并发控制（加减按钮，实时生效）
       if (videoTotal > 0) {
-        html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:11px;">`;
+        html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px;">`;
         html += `<span style="opacity:0.7;">并发:</span>`;
         html += `<button id="__batch_conc_dec__" style="background:rgba(255,255,255,0.15);color:#fff;border:none;width:22px;height:22px;border-radius:4px;cursor:pointer;font-size:13px;line-height:1;padding:0;">−</button>`;
         html += `<span id="__batch_conc_val__" style="min-width:20px;text-align:center;font-weight:bold;">${STATE.userConcurrency}</span>`;
@@ -252,31 +252,33 @@
       }
 
       html += `<button id="__batch_video_btn__" style="
-        background:${videoBtnColor};color:#fff;border:none;padding:8px 18px;
-        border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
+        background:${videoBtnColor};color:#fff;border:none;padding:6px 12px;
+        border-radius:5px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
       ">${videoBtnText}</button>`;
 
-      // 视频进度
+      // 视频进度（固定高度槽，不跳动）
       if (videoProcessing > 0) {
-        html += `<div style="margin-top:6px;">`;
-        html += `<div style="font-size:11px;opacity:0.85;">`;
-        html += `✅ ${videoDone} ❌ ${videoFailed} ⏭ ${videoSkip} 📄活跃 ${videoActive} ⏳剩 ${videoRemaining}`;
+        html += `<div style="height:40px;margin-top:5px;">`;
+        html += `<div style="font-size:11px;opacity:0.85;white-space:nowrap;overflow:hidden;">`;
+        html += `✅${videoDone} ❌${videoFailed} ⏭${videoSkip} 📄${videoActive} ⏳${videoRemaining}`;
         html += `</div>`;
-        html += `<div style="margin-top:2px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;">`;
+        html += `<div style="margin-top:3px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;">`;
         html += `<div style="height:100%;width:${videoProgress}%;background:#2ea0a3;border-radius:2px;transition:width 0.3s;"></div>`;
         html += `</div>`;
         html += `</div>`;
+      } else {
+        html += `<div style="height:40px;margin-top:5px;"></div>`;
       }
 
-      // 正在进行中的标签页
+      // 正在进行中的标签页（固定高度槽，最多显示2行）
       if (STATE.activeTabs.length > 0) {
-        html += `<div style="margin-top:4px;font-size:11px;opacity:0.7;">`;
-        for (const t of STATE.activeTabs) {
+        html += `<div style="font-size:11px;opacity:0.7;line-height:16px;">`;
+        for (const t of STATE.activeTabs.slice(0, 2)) {
           const v = STATE.videos[t.videoIndex];
           if (v) {
-            const sn = v.name.length > 35 ? v.name.substring(0, 32) + '...' : v.name;
+            const sn = v.name.length > 38 ? v.name.substring(0, 35) + '...' : v.name;
             const el = Math.round((Date.now() - t.openedAt) / 1000);
-            html += `<div>  ⏳ ${sn} (${el}s)</div>`;
+            html += `<div>⏳ ${sn} (${el}s)</div>`;
           }
         }
         html += `</div>`;
@@ -330,28 +332,30 @@
       }
 
       html += `<button id="__batch_doc_btn__" style="
-        background:${docBtnColor};color:#fff;border:none;padding:8px 18px;
-        border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
+        background:${docBtnColor};color:#fff;border:none;padding:6px 12px;
+        border-radius:5px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
       ">${docBtnText}</button>`;
 
-      // 文档下载进度
+      // 文档下载进度（固定高度槽）
       if (isDocDownloading || isDocDone) {
-        html += `<div style="margin-top:6px;">`;
-        html += `<div style="font-size:11px;opacity:0.85;">`;
-        html += `✅ ${STATE.docsDone} ❌ ${STATE.docsFailed} ⏳剩 ${docRemaining} 📊 ${docProgress}%`;
+        html += `<div style="height:36px;margin-top:5px;">`;
+        html += `<div style="font-size:11px;opacity:0.85;white-space:nowrap;overflow:hidden;">`;
+        html += `✅${STATE.docsDone} ❌${STATE.docsFailed} ⏳${docRemaining} 📊${docProgress}%`;
         html += `</div>`;
         if (STATE.docsCurrentName) {
-          html += `<div style="font-size:10px;opacity:0.5;margin-top:2px;">📥 ${STATE.docsCurrentName}</div>`;
+          html += `<div style="font-size:10px;opacity:0.5;margin-top:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">📥 ${STATE.docsCurrentName}</div>`;
         }
         html += `<div style="margin-top:2px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;">`;
         html += `<div style="height:100%;width:${docProgress}%;background:#e67e22;border-radius:2px;transition:width 0.3s;"></div>`;
         html += `</div>`;
         html += `</div>`;
+      } else {
+        html += `<div style="height:36px;margin-top:5px;"></div>`;
       }
 
-      // 文档失败列表
+      // 文档失败列表（固定高度槽）
       if (STATE.docsFailList.length > 0 && !isDocDownloading) {
-        html += `<div style="margin-top:4px;font-size:11px;opacity:0.75;max-height:100px;overflow-y:auto;">`;
+        html += `<div style="font-size:11px;opacity:0.75;height:56px;overflow-y:auto;margin-top:4px;">`;
         html += `<div style="color:#e74c3c;">失败 (${STATE.docsFailList.length})：</div>`;
         for (const f of STATE.docsFailList.slice(-8)) {
           html += `<div style="padding-left:6px;">  ❌ ${f}</div>`;
@@ -362,15 +366,15 @@
 
       // ===== 扫描统计 =====
       const stats = STATE.scanStats;
-      html += `<div style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.2);padding-top:8px;">`;
-      html += `<div style="font-weight:bold;margin-bottom:4px;">📊 扫描统计</div>`;
+      html += `<div style="margin-top:6px;border-top:1px solid rgba(255,255,255,0.2);padding-top:5px;">`;
+      html += `<div style="font-weight:bold;margin-bottom:2px;">📊 扫描统计</div>`;
       html += `<div style="font-size:11px;opacity:0.85;">`;
       html += `📁目录 <b>${stats.totalDirs}</b> 📄文件 <b>${stats.totalFiles}</b> 🎬视频 <b style="color:#2ea0a3;">${stats.totalVideos}</b> 📄文档 <b style="color:#e67e22;">${docTotal}</b>`;
       html += `</div>`;
       if (stats.failedDirs.length > 0) {
         html += `<div style="font-size:11px;color:#e74c3c;margin-top:2px;">⚠️ ${stats.failedDirs.length} 个目录扫描失败</div>`;
       }
-      html += `<div style="margin-top:4px;">`;
+      html += `<div style="margin-top:3px;">`;
       html += `<button id="__batch_toggle_details__" style="
         background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);
         padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;
@@ -383,10 +387,10 @@
     }
 
     if (!hasScanned && !STATE.scanning) {
-      html += `<div style="margin-top:6px;font-size:12px;opacity:0.5;">点击"扫描目录"分析当前文件夹及子文件夹中的所有文件</div>`;
+      html += `<div style="height:18px;margin-top:4px;font-size:11px;opacity:0.45;overflow:hidden;">点击"扫描目录"分析所有子文件夹</div>`;
     }
 
-    html += `<div style="margin-top:8px;font-size:10px;opacity:0.4;">v3.2.1 · 固定窗口</div>`;
+    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.1</div>`;
 
     panelInner.innerHTML = html;
 
