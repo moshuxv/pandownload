@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "百度网盘字幕自动导出",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "百度网盘批量处理工具。视频字幕自动导出（并发可调+暂停）+ 文档批量下载（支持多种格式+类型选择）。",
   "permissions": ["tabs", "scripting", "storage", "downloads"],
   "host_permissions": ["https://pan.baidu.com/*"],

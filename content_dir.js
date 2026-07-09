@@ -1,6 +1,6 @@
 // content_dir.js — 注入到百度网盘目录页
 // 在页面右上角添加批量控制面板，自动递归扫描所有子目录的视频/文档文件
-// v3.1: 扫描优化（并行目录获取）+ 并发控制滑块 + 暂停功能 + 多类型文档下载
+// v3.2: 并发数字按钮 + 后台标签页 + 折叠面板 + 多格式文档下载
 
 (function () {
   'use strict';
@@ -24,6 +24,7 @@
   const STATE = {
     enabled: false,
     paused: false,
+    collapsed: false,   // 是否最小化面板
     videos: [],
     currentIndex: 0,
     activeTabs: [],
@@ -78,14 +79,13 @@
       z-index: 2147483647;
       background: rgba(30, 30, 40, 0.97);
       color: #fff;
-      padding: 16px 20px;
+      padding: 12px 16px;
       border-radius: 10px;
       font-size: 13px;
       font-family: -apple-system, "Microsoft YaHei", sans-serif;
       box-shadow: 0 6px 20px rgba(0,0,0,0.5);
-      min-width: 480px;
-      max-width: 640px;
-      max-height: 88vh;
+      width: 420px;
+      max-height: 80vh;
       overflow-y: auto;
       line-height: 1.6;
     `;
@@ -172,7 +172,26 @@
 
     // ===== 组装HTML =====
     let html = '';
-    html += `<div style="font-weight:bold;font-size:15px;margin-bottom:10px;">📂 百度网盘批量处理 v3.1</div>`;
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">`;
+    html += `<span style="font-weight:bold;font-size:15px;">📂 批量处理</span>`;
+    html += `<button id="__batch_toggle_collapse__" style="
+      background:rgba(255,255,255,0.15);color:#fff;border:none;padding:2px 8px;
+      border-radius:4px;font-size:11px;cursor:pointer;
+    ">${STATE.collapsed ? '▼ 展开' : '▲ 收起'}</button>`;
+    html += `</div>`;
+
+    // ===== 折叠内容 =====
+    if (STATE.collapsed) {
+      const vc = STATE.videos.length;
+      const dc = STATE.docs.length;
+      html += `<div style="font-size:11px;opacity:0.6;">`;
+      html += `🎬 ${STATE.totalDone}/${vc} &nbsp; 📄 ${STATE.docsDone}/${dc}`;
+      html += `</div>`;
+      panelEl.innerHTML = html;
+      const collapseBtn = panelEl.querySelector('#__batch_toggle_collapse__');
+      if (collapseBtn) collapseBtn.addEventListener('click', () => { STATE.collapsed = false; updatePanel(); });
+      return;
+    }
 
     // 扫描按钮行
     html += `<div style="margin-bottom:10px;">`;
@@ -198,12 +217,24 @@
       html += `<span style="font-size:12px;opacity:0.7;">${videoTotal} 个视频</span>`;
       html += `</div>`;
 
-      // 并发控制滑块
+      // 并发控制（数字按钮）
       if (videoTotal > 0) {
-        html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;">`;
-        html += `<span>并发:</span>`;
-        html += `<input type="range" id="__batch_concurrency__" min="1" max="10" value="${STATE.userConcurrency}" style="flex:1;cursor:pointer;">`;
-        html += `<span id="__batch_concurrency_val__" style="min-width:20px;text-align:right;">${STATE.userConcurrency}</span>`;
+        html += `<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;font-size:11px;">`;
+        html += `<span style="opacity:0.7;margin-right:4px;">并发:</span>`;
+        for (let n = 1; n <= 10; n++) {
+          const active = STATE.userConcurrency === n;
+          html += `<button data-concurrency="${n}" style="
+            background:${active ? '#3498db' : 'rgba(255,255,255,0.1)'};
+            color:#fff;
+            border:1px solid ${active ? '#3498db' : 'rgba(255,255,255,0.2)'};
+            width:26px;height:26px;
+            border-radius:4px;
+            font-size:11px;
+            cursor:pointer;
+            padding:0;
+            line-height:1;
+          ">${n}</button>`;
+        }
         html += `</div>`;
       }
 
@@ -342,7 +373,7 @@
       html += `<div style="margin-top:6px;font-size:12px;opacity:0.5;">点击"扫描目录"分析当前文件夹及子文件夹中的所有文件</div>`;
     }
 
-    html += `<div style="margin-top:8px;font-size:10px;opacity:0.4;">v3.1 · 并发1-10可调 · 支持暂停</div>`;
+    html += `<div style="margin-top:8px;font-size:10px;opacity:0.4;">v3.2 · 后台标签页 · 窗口可折叠</div>`;
 
     panelEl.innerHTML = html;
 
@@ -359,16 +390,15 @@
     const docBtn = panelEl.querySelector('#__batch_doc_btn__');
     if (docBtn) docBtn.addEventListener('click', startDocDownload);
 
-    const concSlider = panelEl.querySelector('#__batch_concurrency__');
-    const concVal = panelEl.querySelector('#__batch_concurrency_val__');
-    if (concSlider && concVal) {
-      concSlider.addEventListener('input', () => {
-        STATE.userConcurrency = parseInt(concSlider.value);
-        concVal.textContent = STATE.userConcurrency;
+    // 并发数字按钮
+    panelEl.querySelectorAll('button[data-concurrency]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        STATE.userConcurrency = parseInt(btn.dataset.concurrency);
         STATE.maxConcurrent = STATE.userConcurrency;
+        renderPanel();
       });
-      STATE.maxConcurrent = STATE.userConcurrency;
-    }
+    });
+    STATE.maxConcurrent = STATE.userConcurrency;
 
     const detailBtn = panelEl.querySelector('#__batch_toggle_details__');
     if (detailBtn) {
@@ -404,6 +434,15 @@
         renderPanel();
       });
     });
+
+    // 折叠按钮
+    const collapseBtn = panelEl.querySelector('#__batch_toggle_collapse__');
+    if (collapseBtn) {
+      collapseBtn.addEventListener('click', () => {
+        STATE.collapsed = !STATE.collapsed;
+        updatePanel();
+      });
+    }
 
     const selectAllBtn = panelEl.querySelector('#__doc_select_all__');
     if (selectAllBtn) {
@@ -797,24 +836,27 @@
     return allVideos;
   }
 
-  // ========== 打开视频播放页 ==========
+  // ========== 打开视频播放页（后台标签页，不切换焦点）==========
   function openVideoTab(videoIndex) {
     const video = STATE.videos[videoIndex];
     if (!video) return false;
 
     const url = `https://pan.baidu.com/pfile/video?path=${encodeURIComponent(video.path)}&fid=${video.fs_id}&relPath=${encodeURIComponent(video.relPath || '')}`;
-    const newWin = window.open(url, '_blank');
-    if (newWin) {
-      STATE.activeTabs.push({ win: newWin, videoIndex, openedAt: Date.now() });
-      video.status = 'opened';
-      log(`📂 打开: ${video.relPath ? video.relPath + '/' : ''}${video.name}`);
-      return true;
-    } else {
-      log(`❌ 无法打开标签页（可能被浏览器拦截）: ${video.name}`);
-      video.status = 'skip';
-      STATE.totalSkip++;
-      return false;
-    }
+
+    // 使用 chrome.tabs.create 在后台打开标签页，不切换焦点
+    chrome.tabs.create({ url, active: false }, (newTab) => {
+      if (newTab && !chrome.runtime.lastError) {
+        STATE.activeTabs.push({ tabId: newTab.id, videoIndex, openedAt: Date.now() });
+        video.status = 'opened';
+        log(`📂 打开: ${video.relPath ? video.relPath + '/' : ''}${video.name}`);
+      } else {
+        log(`❌ 无法打开标签页: ${video.name}`);
+        video.status = 'skip';
+        STATE.totalSkip++;
+        updatePanel();
+      }
+    });
+    return true;
   }
 
   // ========== 接收视频页面的结果通知 ==========
@@ -845,10 +887,10 @@
     updatePanel();
   });
 
-  // ========== 轮询检测标签页关闭 ==========
+  // ========== 轮询检测标签页关闭（通过 chrome.tabs.get 检查）==========
   function startPolling() {
     if (STATE.pollTimer) return;
-    STATE.pollTimer = setInterval(() => {
+    STATE.pollTimer = setInterval(async () => {
       if (!STATE.enabled) {
         stopPolling();
         return;
@@ -856,20 +898,32 @@
 
       const stillOpen = [];
       for (const t of STATE.activeTabs) {
-        try {
-          if (t.win.closed) {
-            const v = STATE.videos[t.videoIndex];
-            if (v && v.status === 'opened') {
-              v.status = 'done';
-              STATE.totalDone++;
-              log(`✅ 完成: ${v.name}`);
-            }
-          } else {
-            stillOpen.push(t);
-          }
-        } catch (e) {
+        if (t.tabId) {
           try {
-            if (t.win.closed) {
+            await new Promise(resolve => {
+              chrome.tabs.get(t.tabId, (tab) => {
+                if (chrome.runtime.lastError || !tab) {
+                  // 标签页已关闭
+                  const v = STATE.videos[t.videoIndex];
+                  if (v && v.status === 'opened') {
+                    v.status = 'done';
+                    STATE.totalDone++;
+                    log(`✅ 完成: ${v.name}`);
+                  }
+                  resolve(false);
+                } else {
+                  stillOpen.push(t);
+                  resolve(true);
+                }
+              });
+            });
+          } catch (e) {
+            // 忽略错误
+          }
+        } else {
+          // 兼容旧版 win 对象
+          try {
+            if (t.win && t.win.closed) {
               const v = STATE.videos[t.videoIndex];
               if (v && v.status === 'opened') {
                 v.status = 'done';
@@ -879,7 +933,7 @@
             } else {
               stillOpen.push(t);
             }
-          } catch (e2) {
+          } catch (e) {
             stillOpen.push(t);
           }
         }
@@ -888,7 +942,6 @@
       STATE.activeTabs = stillOpen;
       updatePanel();
 
-      // 只有未暂停时才继续调度
       if (!STATE.paused) {
         scheduleNext();
       }
