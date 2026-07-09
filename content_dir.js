@@ -1,6 +1,6 @@
 // content_dir.js — 注入到百度网盘目录页
 // 在页面右上角添加批量控制面板，自动递归扫描所有子目录的视频/文档文件
-// v3.2.1: 固定窗口高度+折叠缩小+并发加减按钮实时生效
+// v3.2.3: 高度自适应+内容自然流动+紧凑布局
 
 (function () {
   'use strict';
@@ -86,7 +86,8 @@
       font-family: -apple-system, "Microsoft YaHei", sans-serif;
       box-shadow: 0 6px 20px rgba(0,0,0,0.5);
       width: 420px;
-      height: 480px;
+      min-height: 200px;
+      height: auto;
       max-height: none;
       overflow: hidden;
       line-height: 1.5;
@@ -138,8 +139,8 @@
       : (hasScanned ? '🔄 重新扫描' : '🔍 扫描目录');
     const scanBtnColor = STATE.scanning ? '#7f8c8d' : '#3498db';
     const scanInfo = STATE.scanning
-      ? `<div style="height:18px;margin-top:3px;font-size:11px;opacity:0.8;color:#f39c12;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">🔄 ${STATE.scanProgress}</div>`
-      : `<div style="height:21px;margin-top:3px;"></div>`;
+      ? `<div style="margin-top:3px;font-size:11px;opacity:0.8;color:#f39c12;">🔄 ${STATE.scanProgress}</div>`
+      : '';
 
     // ===== 视频字幕导出按钮 =====
     const videoTotal = STATE.videos.length;
@@ -203,11 +204,11 @@
       html += `🎬 ${STATE.totalDone}/${vc} &nbsp; 📄 ${STATE.docsDone}/${dc}`;
       html += `</div>`;
       panelInner.innerHTML = html;
-      panelEl.style.height = '50px';
+      panelEl.style.height = '42px';
       const collapseBtn = panelInner.querySelector('#__batch_toggle_collapse__');
       if (collapseBtn) collapseBtn.addEventListener('click', () => {
         STATE.collapsed = false;
-        panelEl.style.height = '480px';
+        panelEl.style.height = 'auto';
         updatePanel();
       });
       return;
@@ -256,34 +257,29 @@
         border-radius:5px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
       ">${videoBtnText}</button>`;
 
-      // 视频进度（固定高度槽，不跳动）
+      // 视频进度
       if (videoProcessing > 0) {
-        html += `<div style="height:40px;margin-top:5px;">`;
-        html += `<div style="font-size:11px;opacity:0.85;white-space:nowrap;overflow:hidden;">`;
+        html += `<div style="margin-top:4px;">`;
+        html += `<div style="font-size:11px;opacity:0.85;">`;
         html += `✅${videoDone} ❌${videoFailed} ⏭${videoSkip} 📄${videoActive} ⏳${videoRemaining}`;
         html += `</div>`;
         html += `<div style="margin-top:3px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;">`;
         html += `<div style="height:100%;width:${videoProgress}%;background:#2ea0a3;border-radius:2px;transition:width 0.3s;"></div>`;
         html += `</div>`;
-        html += `</div>`;
-      } else {
-        html += `<div style="height:40px;margin-top:5px;"></div>`;
-      }
-
-      // 正在进行中的标签页（固定高度槽，最多显示2行）
-      if (STATE.activeTabs.length > 0) {
-        html += `<div style="font-size:11px;opacity:0.7;line-height:16px;">`;
-        for (const t of STATE.activeTabs.slice(0, 2)) {
-          const v = STATE.videos[t.videoIndex];
-          if (v) {
-            const sn = v.name.length > 38 ? v.name.substring(0, 35) + '...' : v.name;
-            const el = Math.round((Date.now() - t.openedAt) / 1000);
-            html += `<div>⏳ ${sn} (${el}s)</div>`;
+        if (STATE.activeTabs.length > 0) {
+          html += `<div style="margin-top:3px;font-size:11px;opacity:0.7;">`;
+          for (const t of STATE.activeTabs.slice(0, 2)) {
+            const v = STATE.videos[t.videoIndex];
+            if (v) {
+              const sn = v.name.length > 38 ? v.name.substring(0, 35) + '...' : v.name;
+              const el = Math.round((Date.now() - t.openedAt) / 1000);
+              html += `<div>⏳ ${sn} (${el}s)</div>`;
+            }
           }
+          html += `</div>`;
         }
         html += `</div>`;
       }
-      html += `</div>`;
 
       // ===== 文档下载区域 =====
       html += `<div style="border-top:1px solid rgba(255,255,255,0.15);padding-top:8px;">`;
@@ -336,26 +332,24 @@
         border-radius:5px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
       ">${docBtnText}</button>`;
 
-      // 文档下载进度（固定高度槽）
+      // 文档下载进度
       if (isDocDownloading || isDocDone) {
-        html += `<div style="height:36px;margin-top:5px;">`;
-        html += `<div style="font-size:11px;opacity:0.85;white-space:nowrap;overflow:hidden;">`;
+        html += `<div style="margin-top:4px;">`;
+        html += `<div style="font-size:11px;opacity:0.85;">`;
         html += `✅${STATE.docsDone} ❌${STATE.docsFailed} ⏳${docRemaining} 📊${docProgress}%`;
         html += `</div>`;
         if (STATE.docsCurrentName) {
-          html += `<div style="font-size:10px;opacity:0.5;margin-top:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">📥 ${STATE.docsCurrentName}</div>`;
+          html += `<div style="font-size:10px;opacity:0.5;margin-top:2px;">📥 ${STATE.docsCurrentName}</div>`;
         }
         html += `<div style="margin-top:2px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;">`;
         html += `<div style="height:100%;width:${docProgress}%;background:#e67e22;border-radius:2px;transition:width 0.3s;"></div>`;
         html += `</div>`;
         html += `</div>`;
-      } else {
-        html += `<div style="height:36px;margin-top:5px;"></div>`;
       }
 
-      // 文档失败列表（固定高度槽）
+      // 文档失败列表
       if (STATE.docsFailList.length > 0 && !isDocDownloading) {
-        html += `<div style="font-size:11px;opacity:0.75;height:56px;overflow-y:auto;margin-top:4px;">`;
+        html += `<div style="margin-top:4px;font-size:11px;opacity:0.75;max-height:80px;overflow-y:auto;">`;
         html += `<div style="color:#e74c3c;">失败 (${STATE.docsFailList.length})：</div>`;
         for (const f of STATE.docsFailList.slice(-8)) {
           html += `<div style="padding-left:6px;">  ❌ ${f}</div>`;
@@ -387,10 +381,10 @@
     }
 
     if (!hasScanned && !STATE.scanning) {
-      html += `<div style="height:18px;margin-top:4px;font-size:11px;opacity:0.45;overflow:hidden;">点击"扫描目录"分析所有子文件夹</div>`;
+      html += `<div style="margin-top:4px;font-size:11px;opacity:0.45;">点击"扫描目录"分析所有子文件夹</div>`;
     }
 
-    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.1</div>`;
+    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.3</div>`;
 
     panelInner.innerHTML = html;
 
