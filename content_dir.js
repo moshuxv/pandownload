@@ -101,7 +101,9 @@
       panelEl.appendChild(panelInner);
     }
     document.documentElement.appendChild(panelEl);
+    console.log('[BatchPanel] 面板已创建, panelEl:', panelEl);
     renderPanel();
+    console.log('[BatchPanel] 初始渲染完成, currentDir:', getCurrentDirPath());
   }
 
   // ========== 获取文件扩展名 ==========
@@ -379,7 +381,7 @@
       html += `<div style="margin-top:4px;font-size:11px;opacity:0.45;">点击"扫描目录"分析所有子文件夹</div>`;
     }
 
-    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.5</div>`;
+    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.6</div>`;
 
     panelInner.innerHTML = html;
 
@@ -391,6 +393,7 @@
     });
 
     const videoBtn = panelEl.querySelector('#__batch_video_btn__');
+    console.log('[BatchPanel] 查找视频按钮, videoBtn:', videoBtn, 'innerHTML:', videoBtn ? videoBtn.outerHTML : 'NOT FOUND');
     if (videoBtn) videoBtn.addEventListener('click', window.__toggleVideoExport);
 
     const docBtn = panelEl.querySelector('#__batch_doc_btn__');
@@ -869,6 +872,7 @@
     if (!video) return false;
 
     const url = `https://pan.baidu.com/pfile/video?path=${encodeURIComponent(video.path)}&fid=${video.fs_id}&relPath=${encodeURIComponent(video.relPath || '')}`;
+    console.log('[BatchPanel] openVideoTab, index:', videoIndex, 'url:', url);
 
     // 使用 chrome.tabs.create 在后台打开标签页，不切换焦点
     chrome.tabs.create({ url, active: false }, (newTab) => {
@@ -1005,6 +1009,7 @@
   // ========== 纯扫描（不启动导出，只收集文件列表） ==========
   async function doScan() {
     if (STATE.scanning) return;
+    console.log('[BatchPanel] doScan 开始, currentDir:', getCurrentDirPath());
 
     const currentDir = getCurrentDirPath();
     if (!currentDir) {
@@ -1061,6 +1066,7 @@
     STATE.docsTotal = docs.length;
 
     const docCount = STATE.docs.length;
+    console.log('[BatchPanel] 扫描完成, videos:', STATE.videos.length, 'docs:', STATE.docs.length, 'scanStats:', STATE.scanStats);
     log(`🔍 扫描完成：${STATE.scanStats.totalDirs}个目录, ${STATE.scanStats.totalFiles}个文件, ${STATE.scanStats.totalVideos}个视频, ${docCount}个文档`);
 
     if (STATE.scanStats.totalVideos === 0 && docCount === 0) {
@@ -1071,7 +1077,13 @@
 
   // ========== 视频字幕导出开关（暂停/继续） ==========
   window.__toggleVideoExport = function toggleVideoExport() {
-    const videoCount = STATE.videos.length;
+    console.log('[BatchPanel] toggleVideoExport called', {
+      videoCount: STATE.videos.length,
+      enabled: STATE.enabled,
+      paused: STATE.paused,
+      scanStats: STATE.scanStats,
+      rootDir: STATE.rootDir,
+    });
     if (videoCount === 0) {
       log('❌ 未找到任何视频文件，请先扫描目录');
       return;
