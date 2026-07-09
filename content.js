@@ -227,23 +227,46 @@
     const maxWait = 120000;
     const interval = 2000;
     const start = Date.now();
+
+    // 步骤1：先等待页面 DOM 和关键资源加载完成
+    if (document.readyState !== 'complete') {
+      log('等待 document.readyState = complete...');
+      await new Promise(resolve => {
+        if (document.readyState === 'complete') { resolve(); return; }
+        window.addEventListener('load', () => resolve(), { once: true });
+        // 超时兜底
+        setTimeout(resolve, 30000);
+      });
+      log('页面 load 事件已触发');
+    }
+
+    // 步骤2：等待 React/百度网盘 SPA 初始化（等待主要 DOM 元素出现）
     while (Date.now() - start < maxWait) {
+      // 检查标签栏是否出现
       const tabs = document.querySelectorAll('div.vp-tabs__header-item');
       if (tabs.length > 0) {
         log(`页面加载完成（${tabs.length} 个标签）`);
         return true;
       }
-      const player = document.querySelector('.vp-video-player, .video-player, video');
+      // 检查播放器是否出现（有些视频页面可能没有标签栏）
+      const player = document.querySelector('.vp-video-player, .video-player, video, .vp-main');
       if (player) {
-        log('播放器已加载，等待标签栏...');
+        log('播放器/主界面已加载，等待标签栏...');
         await sleep(3000);
         const tabs2 = document.querySelectorAll('div.vp-tabs__header-item');
         if (tabs2.length > 0) {
           log(`页面加载完成（${tabs2.length} 个标签）`);
           return true;
         }
+        // 如果有播放器但没有标签栏，再等几秒后重试
+        await sleep(5000);
+        const tabs3 = document.querySelectorAll('div.vp-tabs__header-item');
+        if (tabs3.length > 0) {
+          log(`页面加载完成（${tabs3.length} 个标签）`);
+          return true;
+        }
       }
-      log('等待页面加载...');
+      log('等待页面加载（已等待 ' + Math.round((Date.now() - start) / 1000) + 's）...');
       await sleep(interval);
     }
     log('页面加载超时（2分钟）');

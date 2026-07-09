@@ -1,7 +1,6 @@
 // content_dir.js — 注入到百度网盘目录页
-// 在页面右上角添加批量控制面板，自动递归扫描所有子目录的视频文件
-// 逐个打开视频播放页，保持最多5个并发标签页
-// v2.1: 递归扫描 + 完整诊断信息（总文件/视频/非视频分类）+ API分页 + 失败重试
+// 在页面右上角添加批量控制面板，自动递归扫描所有子目录的视频/文档文件
+// v3.1: 扫描优化（并行目录获取）+ 并发控制滑块 + 暂停功能 + 多类型文档下载
 
 (function () {
   'use strict';
@@ -9,39 +8,55 @@
   if (window.__BaiduPanBatchController__) return;
   window.__BaiduPanBatchController__ = true;
 
+  // ========== 支持下载的文件类型 ==========
+  const DOC_TYPES = {
+    documents: ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'csv'],
+    images: ['jpg', 'jpeg', 'png', 'webp'],
+    text: ['md', 'txt'],
+    audio: ['mp3', 'm4a', 'wav', 'aac'],
+    other: ['xmind', 'html'],
+  };
+  const ALL_DOC_EXTS = Object.values(DOC_TYPES).flat();
+
+  // ========== 默认选中的下载类型 ==========
+  const DEFAULT_SELECTED = new Set(['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'md', 'txt']);
+
   const STATE = {
     enabled: false,
-    videos: [],          // [{name, path, fs_id, relPath, status}]
+    paused: false,
+    videos: [],
     currentIndex: 0,
     activeTabs: [],
     maxConcurrent: 5,
+    userConcurrency: 5,    // 用户可调节的并发数（1-10）
     totalDone: 0,
     totalSkip: 0,
-    totalFailed: 0,     // 失败计数（找不到文稿按钮等）
+    totalFailed: 0,
     pollTimer: null,
-    rootDir: '',         // 启动批量导出时的根目录（用于计算相对路径）
+    rootDir: '',
     scanning: false,
     scanProgress: '',
-    // 诊断信息
     scanStats: {
-      totalDirs: 0,        // 扫描的目录总数
-      totalFiles: 0,       // 所有文件总数（含视频和非视频）
-      totalVideos: 0,      // 视频文件数
-      totalNonVideos: 0,   // 非视频文件数
-      failedDirs: [],      // 扫描失败的目录 [{path, error, retries}]
-      nonVideoFiles: [],   // 非视频文件列表 [{name, dir, ext}]
-      dirDetails: [],      // 每个目录的详细信息 [{path, totalFiles, videos, nonVideos, nonVideoNames}]
+      totalDirs: 0,
+      totalFiles: 0,
+      totalVideos: 0,
+      totalNonVideos: 0,
+      failedDirs: [],
+      nonVideoFiles: [],
+      dirDetails: [],
     },
-    showDetails: false,    // 是否显示详细诊断信息
-    showFailed: false,     // 是否显示失败视频列表
-    // === PDF 下载相关 ===
-    pdfs: [],              // [{name, path, fs_id, relPath, size, status}]
-    pdfMode: 'idle',       // 'idle' | 'scanning' | 'downloading' | 'done'
-    pdfsTotal: 0,
-    pdfsDone: 0,
-    pdfsFailed: 0,
-    pdfsFailList: [],      // 下载失败的PDF列表
-    pdfCurrentName: '',    // 当前正在下载的PDF名称
+    showDetails: false,
+    showFailed: false,
+    // === 文档下载相关 ===
+    docs: [],              // [{name, path, fs_id, relPath, size, status, ext}]
+    docMode: 'idle',       // 'idle' | 'downloading' | 'done'
+    docsTotal: 0,
+    docsDone: 0,
+    docsFailed: 0,
+    docsFailList: [],
+    docsCurrentName: '',
+    selectedDocTypes: DEFAULT_SELECTED, // Set of selected extensions
+    showDocTypes: false,   // 是否展开文件类型选择
   };
 
   function log(msg) {
@@ -68,9 +83,9 @@
       font-size: 13px;
       font-family: -apple-system, "Microsoft YaHei", sans-serif;
       box-shadow: 0 6px 20px rgba(0,0,0,0.5);
-      min-width: 460px;
-      max-width: 620px;
-      max-height: 85vh;
+      min-width: 480px;
+      max-width: 640px;
+      max-height: 88vh;
       overflow-y: auto;
       line-height: 1.6;
     `;
@@ -78,6 +93,24 @@
     renderPanel();
   }
 
+  // ========== 获取文件扩展名 ==========
+  function getExt(filename) {
+    const idx = filename.lastIndexOf('.');
+    return idx >= 0 ? filename.substring(idx + 1).toLowerCase() : '';
+  }
+
+  // ========== 判断是否是视频文件 ==========
+  function isVideoFile(filename) {
+    const ext = getExt(filename);
+    return ['mp4', 'm4v', 'mkv', 'avi', 'mov', 'flv', 'wmv', 'webm', 'm4a'].includes(ext);
+  }
+
+  // ========== 判断是否是选中的文档文件 ==========
+  function isDocFile(filename) {
+    return STATE.selectedDocTypes.has(getExt(filename));
+  }
+
+  // ========== 渲染面板 ==========
   function renderPanel() {
     if (!panelEl) return;
 
@@ -106,39 +139,40 @@
 
     let videoBtnText = '🎬 导出视频字幕';
     let videoBtnColor = '#2ea0a3';
-    if (isVideoRunning) {
-      videoBtnText = '⏹ 停止导出';
-      videoBtnColor = '#e74c3c';
+    if (isVideoRunning && !STATE.paused) {
+      videoBtnText = '⏸ 暂停';
+      videoBtnColor = '#e67e22';
+    } else if (isVideoRunning && STATE.paused) {
+      videoBtnText = '▶ 继续';
+      videoBtnColor = '#27ae60';
     } else if (videoProcessing > 0 && !isVideoRunning) {
       videoBtnText = '▶ 继续导出';
       videoBtnColor = '#2ea0a3';
     }
 
-    // ===== PDF下载按钮 =====
-    const pdfTotal = STATE.pdfs.length;
-    const isPDFDownloading = STATE.pdfMode === 'downloading';
-    const isPDFDone = STATE.pdfMode === 'done';
-    const pdfProgress = pdfTotal > 0 ? Math.round((STATE.pdfsDone / pdfTotal) * 100) : 0;
-    const pdfRemaining = pdfTotal - STATE.pdfsDone - STATE.pdfsFailed;
+    // ===== 文档下载按钮 =====
+    const docTotal = STATE.docs.length;
+    const isDocDownloading = STATE.docMode === 'downloading';
+    const isDocDone = STATE.docMode === 'done';
+    const docProgress = docTotal > 0 ? Math.round((STATE.docsDone / docTotal) * 100) : 0;
+    const docRemaining = docTotal - STATE.docsDone - STATE.docsFailed;
 
-    let pdfBtnText = '📕 下载PDF文档';
-    let pdfBtnColor = '#e67e22';
-    let pdfBtnDisabled = '';
-    if (isPDFDownloading) {
-      pdfBtnText = '⏳ 下载中...';
-      pdfBtnColor = '#c0392b';
-      pdfBtnDisabled = 'disabled';
-    } else if (isPDFDone && STATE.pdfsFailed > 0) {
-      pdfBtnText = '🔁 重新下载PDF';
-      pdfBtnColor = '#e67e22';
-    } else if (isPDFDone) {
-      pdfBtnText = '✅ PDF下载完成';
-      pdfBtnColor = '#27ae60';
+    let docBtnText = '📄 下载文档';
+    let docBtnColor = '#e67e22';
+    if (isDocDownloading) {
+      docBtnText = '⏳ 下载中...';
+      docBtnColor = '#c0392b';
+    } else if (isDocDone && STATE.docsFailed > 0) {
+      docBtnText = '🔁 重新下载';
+      docBtnColor = '#e67e22';
+    } else if (isDocDone) {
+      docBtnText = '✅ 下载完成';
+      docBtnColor = '#27ae60';
     }
 
     // ===== 组装HTML =====
     let html = '';
-    html += `<div style="font-weight:bold;font-size:15px;margin-bottom:10px;">📂 百度网盘文件批量处理 v3.0</div>`;
+    html += `<div style="font-weight:bold;font-size:15px;margin-bottom:10px;">📂 百度网盘批量处理 v3.1</div>`;
 
     // 扫描按钮行
     html += `<div style="margin-bottom:10px;">`;
@@ -153,9 +187,8 @@
     html += `</div>`;
     html += scanInfo;
 
-    // 两个操作按钮（扫描完成才显示）
+    // ===== 两个操作按钮（扫描完成后才显示）=====
     if (hasScanned) {
-      // 分隔线
       html += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px;">`;
 
       // ===== 视频字幕导出区域 =====
@@ -164,6 +197,16 @@
       html += `<span style="font-weight:bold;">🎬 视频字幕</span>`;
       html += `<span style="font-size:12px;opacity:0.7;">${videoTotal} 个视频</span>`;
       html += `</div>`;
+
+      // 并发控制滑块
+      if (videoTotal > 0) {
+        html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;">`;
+        html += `<span>并发:</span>`;
+        html += `<input type="range" id="__batch_concurrency__" min="1" max="10" value="${STATE.userConcurrency}" style="flex:1;cursor:pointer;">`;
+        html += `<span id="__batch_concurrency_val__" style="min-width:20px;text-align:right;">${STATE.userConcurrency}</span>`;
+        html += `</div>`;
+      }
+
       html += `<button id="__batch_video_btn__" style="
         background:${videoBtnColor};color:#fff;border:none;padding:8px 18px;
         border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
@@ -196,49 +239,89 @@
       }
       html += `</div>`;
 
-      // ===== PDF下载区域 =====
+      // ===== 文档下载区域 =====
       html += `<div style="border-top:1px solid rgba(255,255,255,0.15);padding-top:8px;">`;
       html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">`;
-      html += `<span style="font-weight:bold;">📕 PDF文档</span>`;
-      html += `<span style="font-size:12px;opacity:0.7;">${pdfTotal} 个PDF</span>`;
+      html += `<span style="font-weight:bold;">📄 文档下载</span>`;
+      html += `<span style="font-size:12px;opacity:0.7;">${docTotal} 个文件</span>`;
       html += `</div>`;
-      html += `<button id="__batch_pdf_btn__" style="
-        background:${pdfBtnColor};color:#fff;border:none;padding:8px 18px;
-        border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
-      " ${pdfBtnDisabled}>${pdfBtnText}</button>`;
 
-      // PDF进度
-      if (isPDFDownloading || isPDFDone) {
-        html += `<div style="margin-top:6px;">`;
-        html += `<div style="font-size:11px;opacity:0.85;">`;
-        html += `✅ ${STATE.pdfsDone} ❌ ${STATE.pdfsFailed} ⏳剩 ${pdfRemaining} 📊 ${pdfProgress}%`;
-        html += `</div>`;
-        if (STATE.pdfCurrentName) {
-          html += `<div style="font-size:10px;opacity:0.5;margin-top:2px;">📥 ${STATE.pdfCurrentName}</div>`;
-        }
-        html += `<div style="margin-top:2px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;">`;
-        html += `<div style="height:100%;width:${pdfProgress}%;background:#e67e22;border-radius:2px;transition:width 0.3s;"></div>`;
+      // 文件类型选择（可展开）
+      html += `<div style="margin-bottom:6px;">`;
+      html += `<button id="__batch_toggle_doc_types__" style="
+        background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.25);
+        padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;
+      ">${STATE.showDocTypes ? '收起' : '选择文件类型'} (已选${STATE.selectedDocTypes.size}种)</button>`;
+      html += `</div>`;
+
+      if (STATE.showDocTypes) {
+        html += `<div style="background:rgba(0,0,0,0.25);border-radius:6px;padding:10px;margin-bottom:8px;font-size:11px;">`;
+
+        const renderGroup = (label, exts, color) => {
+          html += `<div style="margin-bottom:6px;"><span style="color:${color};font-weight:bold;">${label}:</span></div>`;
+          html += `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">`;
+          for (const ext of exts) {
+            const checked = STATE.selectedDocTypes.has(ext);
+            const id = `__doc_type_${ext}__`;
+            html += `<label style="display:flex;align-items:center;gap:3px;cursor:pointer;background:rgba(255,255,255,${checked ? '0.2' : '0.08'});padding:2px 7px;border-radius:3px;border:1px solid rgba(255,255,255,${checked ? '0.4' : '0.15'});">`;
+            html += `<input type="checkbox" id="${id}" data-ext="${ext}" ${checked ? 'checked' : ''} style="cursor:pointer;">`;
+            html += `<span>.${ext}</span>`;
+            html += `</label>`;
+          }
+          html += `</div>`;
+        };
+
+        renderGroup('📕 文档', DOC_TYPES.documents, '#e74c3c');
+        renderGroup('🖼 图片', DOC_TYPES.images, '#3498db');
+        renderGroup('📝 文本', DOC_TYPES.text, '#2ecc71');
+        renderGroup('🎵 音频', DOC_TYPES.audio, '#9b59b6');
+        renderGroup('📎 其他', DOC_TYPES.other, '#f39c12');
+
+        // 快速操作
+        html += `<div style="display:flex;gap:6px;margin-top:4px;">`;
+        html += `<button id="__doc_select_all__" style="background:#3498db;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">全选</button>`;
+        html += `<button id="__doc_select_none__" style="background:#7f8c8d;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;">清空</button>`;
         html += `</div>`;
         html += `</div>`;
       }
 
-      // PDF失败列表
-      if (STATE.pdfsFailList.length > 0 && !isPDFDownloading) {
+      html += `<button id="__batch_doc_btn__" style="
+        background:${docBtnColor};color:#fff;border:none;padding:8px 18px;
+        border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
+      ">${docBtnText}</button>`;
+
+      // 文档下载进度
+      if (isDocDownloading || isDocDone) {
+        html += `<div style="margin-top:6px;">`;
+        html += `<div style="font-size:11px;opacity:0.85;">`;
+        html += `✅ ${STATE.docsDone} ❌ ${STATE.docsFailed} ⏳剩 ${docRemaining} 📊 ${docProgress}%`;
+        html += `</div>`;
+        if (STATE.docsCurrentName) {
+          html += `<div style="font-size:10px;opacity:0.5;margin-top:2px;">📥 ${STATE.docsCurrentName}</div>`;
+        }
+        html += `<div style="margin-top:2px;height:4px;background:rgba(255,255,255,0.15);border-radius:2px;">`;
+        html += `<div style="height:100%;width:${docProgress}%;background:#e67e22;border-radius:2px;transition:width 0.3s;"></div>`;
+        html += `</div>`;
+        html += `</div>`;
+      }
+
+      // 文档失败列表
+      if (STATE.docsFailList.length > 0 && !isDocDownloading) {
         html += `<div style="margin-top:4px;font-size:11px;opacity:0.75;max-height:100px;overflow-y:auto;">`;
-        html += `<div style="color:#e74c3c;">失败 (${STATE.pdfsFailList.length})：</div>`;
-        for (const f of STATE.pdfsFailList.slice(-8)) {
+        html += `<div style="color:#e74c3c;">失败 (${STATE.docsFailList.length})：</div>`;
+        for (const f of STATE.docsFailList.slice(-8)) {
           html += `<div style="padding-left:6px;">  ❌ ${f}</div>`;
         }
         html += `</div>`;
       }
-      html += `</div>`;
+      html += `</div>`; // end 文档下载区域
 
       // ===== 扫描统计 =====
       const stats = STATE.scanStats;
       html += `<div style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.2);padding-top:8px;">`;
       html += `<div style="font-weight:bold;margin-bottom:4px;">📊 扫描统计</div>`;
       html += `<div style="font-size:11px;opacity:0.85;">`;
-      html += `📁目录 <b>${stats.totalDirs}</b> 📄文件 <b>${stats.totalFiles}</b> 🎬视频 <b style="color:#2ea0a3;">${stats.totalVideos}</b> 📕PDF <b style="color:#e74c3c;">${pdfTotal}</b>`;
+      html += `📁目录 <b>${stats.totalDirs}</b> 📄文件 <b>${stats.totalFiles}</b> 🎬视频 <b style="color:#2ea0a3;">${stats.totalVideos}</b> 📄文档 <b style="color:#e67e22;">${docTotal}</b>`;
       html += `</div>`;
       if (stats.failedDirs.length > 0) {
         html += `<div style="font-size:11px;color:#e74c3c;margin-top:2px;">⚠️ ${stats.failedDirs.length} 个目录扫描失败</div>`;
@@ -252,7 +335,6 @@
       if (STATE.showDetails) html += renderDetailsHtml();
       html += `</div>`;
 
-      // 视频失败列表
       html += renderFailedHtml();
     }
 
@@ -260,19 +342,33 @@
       html += `<div style="margin-top:6px;font-size:12px;opacity:0.5;">点击"扫描目录"分析当前文件夹及子文件夹中的所有文件</div>`;
     }
 
-    html += `<div style="margin-top:8px;font-size:10px;opacity:0.4;">v3.0 · 最多${STATE.maxConcurrent}个视频并发 · 3个PDF并发</div>`;
+    html += `<div style="margin-top:8px;font-size:10px;opacity:0.4;">v3.1 · 并发1-10可调 · 支持暂停</div>`;
 
     panelEl.innerHTML = html;
 
     // ===== 绑定事件 =====
     const scanBtn = panelEl.querySelector('#__batch_scan_btn__');
-    if (scanBtn) scanBtn.addEventListener('click', doScan);
+    if (scanBtn) scanBtn.addEventListener('click', () => {
+      // 扫描前先根据当前选中类型重新收集文件
+      doScan();
+    });
 
     const videoBtn = panelEl.querySelector('#__batch_video_btn__');
     if (videoBtn) videoBtn.addEventListener('click', toggleVideoExport);
 
-    const pdfBtn = panelEl.querySelector('#__batch_pdf_btn__');
-    if (pdfBtn) pdfBtn.addEventListener('click', startPDFDownload);
+    const docBtn = panelEl.querySelector('#__batch_doc_btn__');
+    if (docBtn) docBtn.addEventListener('click', startDocDownload);
+
+    const concSlider = panelEl.querySelector('#__batch_concurrency__');
+    const concVal = panelEl.querySelector('#__batch_concurrency_val__');
+    if (concSlider && concVal) {
+      concSlider.addEventListener('input', () => {
+        STATE.userConcurrency = parseInt(concSlider.value);
+        concVal.textContent = STATE.userConcurrency;
+        STATE.maxConcurrent = STATE.userConcurrency;
+      });
+      STATE.maxConcurrent = STATE.userConcurrency;
+    }
 
     const detailBtn = panelEl.querySelector('#__batch_toggle_details__');
     if (detailBtn) {
@@ -284,6 +380,74 @@
 
     const retryBtn = panelEl.querySelector('#__batch_retry_failed__');
     if (retryBtn) retryBtn.addEventListener('click', retryFailedVideos);
+
+    // 文档类型选择
+    const toggleDocTypesBtn = panelEl.querySelector('#__batch_toggle_doc_types__');
+    if (toggleDocTypesBtn) {
+      toggleDocTypesBtn.addEventListener('click', () => {
+        STATE.showDocTypes = !STATE.showDocTypes;
+        renderPanel();
+      });
+    }
+
+    // 文件类型复选框
+    panelEl.querySelectorAll('input[data-ext]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const ext = cb.dataset.ext;
+        if (cb.checked) {
+          STATE.selectedDocTypes.add(ext);
+        } else {
+          STATE.selectedDocTypes.delete(ext);
+        }
+        // 重新收集文件
+        reCollectDocs();
+        renderPanel();
+      });
+    });
+
+    const selectAllBtn = panelEl.querySelector('#__doc_select_all__');
+    if (selectAllBtn) {
+      selectAllBtn.addEventListener('click', () => {
+        ALL_DOC_EXTS.forEach(e => STATE.selectedDocTypes.add(e));
+        reCollectDocs();
+        renderPanel();
+      });
+    }
+
+    const selectNoneBtn = panelEl.querySelector('#__doc_select_none__');
+    if (selectNoneBtn) {
+      selectNoneBtn.addEventListener('click', () => {
+        STATE.selectedDocTypes.clear();
+        reCollectDocs();
+        renderPanel();
+      });
+    }
+  }
+
+  // ========== 根据当前选中类型重新收集文档 ==========
+  function reCollectDocs() {
+    // 从已扫描的 nonVideoFiles 中按扩展名重新筛选
+    const newDocs = [];
+    for (const f of STATE.scanStats.nonVideoFiles) {
+      if (STATE.selectedDocTypes.has(f.ext)) {
+        newDocs.push({
+          name: f.name,
+          path: f.path,
+          fs_id: f.fs_id,
+          relPath: f.dir === '(根目录)' ? '' : f.dir,
+          size: f.size || 0,
+          status: 'pending',
+          ext: f.ext,
+        });
+      }
+    }
+    STATE.docs = newDocs;
+    STATE.docsTotal = newDocs.length;
+    STATE.docsDone = 0;
+    STATE.docsFailed = 0;
+    STATE.docsFailList = [];
+    STATE.docMode = 'idle';
+    log(`已按所选类型筛选文档: ${newDocs.length} 个文件`);
   }
 
   // ========== 渲染详细诊断信息 ==========
@@ -291,7 +455,6 @@
     const stats = STATE.scanStats;
     let html = '<div style="margin-top:8px;font-size:11px;opacity:0.85;max-height:300px;overflow-y:auto;border:1px solid rgba(255,255,255,0.15);padding:8px;border-radius:4px;">';
 
-    // 失败目录
     if (stats.failedDirs.length > 0) {
       html += '<div style="color:#e74c3c;font-weight:bold;margin-bottom:4px;">⚠️ 扫描失败的目录：</div>';
       for (const fd of stats.failedDirs) {
@@ -300,14 +463,12 @@
       html += '<hr style="border-color:rgba(255,255,255,0.15);margin:6px 0;">';
     }
 
-    // 每个目录的详情
     html += '<div style="font-weight:bold;margin-bottom:4px;">📁 各目录详情：</div>';
     for (const dir of stats.dirDetails) {
       const shortPath = dir.path.length > 60 ? '...' + dir.path.substring(dir.path.length - 57) : dir.path;
       html += `<div style="margin-bottom:3px;">`;
       html += `<div style="color:#aaa;">📂 ${shortPath}</div>`;
       html += `<div style="padding-left:12px;">总文件: ${dir.totalFiles}, 视频: <span style="color:#2ea0a3;">${dir.videos}</span>, 非视频: <span style="color:#f39c12;">${dir.nonVideos}</span></div>`;
-      // 列出非视频文件
       if (dir.nonVideoNames.length > 0) {
         html += '<div style="padding-left:12px;font-size:10px;opacity:0.7;">非视频文件：</div>';
         for (const nv of dir.nonVideoNames) {
@@ -317,11 +478,9 @@
       html += `</div>`;
     }
 
-    // 非视频文件汇总
     if (stats.nonVideoFiles.length > 0) {
       html += '<hr style="border-color:rgba(255,255,255,0.15);margin:6px 0;">';
       html += `<div style="font-weight:bold;margin-bottom:4px;">📎 全部非视频文件 (${stats.nonVideoFiles.length})：</div>`;
-      // 按扩展名分组统计
       const extMap = {};
       for (const nvf of stats.nonVideoFiles) {
         const ext = nvf.ext || '(无扩展名)';
@@ -330,10 +489,14 @@
       }
       for (const ext of Object.keys(extMap).sort()) {
         const list = extMap[ext];
-        html += `<div style="margin-bottom:3px;"><b style="color:#f39c12;">.${ext}</b> (${list.length}个)</div>`;
-        for (const nvf of list) {
+        const isSelected = STATE.selectedDocTypes.has(ext);
+        html += `<div style="margin-bottom:3px;"><b style="color:${isSelected ? '#e67e22' : '#f39c12'};">.${ext}</b> (${list.length}个)${isSelected ? ' ✅' : ''}</div>`;
+        for (const nvf of list.slice(0, 3)) {
           const shortDir = nvf.dir.length > 40 ? '...' + nvf.dir.substring(nvf.dir.length - 37) : nvf.dir;
           html += `<div style="padding-left:12px;font-size:10px;opacity:0.6;">${nvf.name} <span style="opacity:0.5;">@ ${shortDir}</span></div>`;
+        }
+        if (list.length > 3) {
+          html += `<div style="padding-left:12px;font-size:10px;opacity:0.4;">... 还有 ${list.length - 3} 个</div>`;
         }
       }
     }
@@ -348,74 +511,46 @@
 
   // ========== 渲染失败视频列表 ==========
   function renderFailedHtml() {
+    if (STATE.totalFailed === 0) return '';
     const failedVideos = STATE.videos.filter(v => v.status === 'failed');
-    if (failedVideos.length === 0) return '';
-
-    let html = `
-      <div style="margin-top:10px;border-top:1px solid rgba(231,76,60,0.4);padding-top:8px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <span style="font-weight:bold;color:#e74c3c;">❌ 失败的视频 (${failedVideos.length})：</span>
-          <button id="__batch_retry_failed__" style="
-            background:#e67e22;color:#fff;border:none;padding:4px 12px;
-            border-radius:4px;font-size:12px;font-weight:bold;cursor:pointer;
-          ">🔁 一键重新打开</button>
-        </div>
+    return `
+      <div style="margin-top:6px;">
+        <button id="__batch_retry_failed__" style="
+          background:rgba(200,50,50,0.3);color:#fff;border:1px solid rgba(200,50,50,0.5);
+          padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;
+        ">🔁 重试失败 (${failedVideos.length})</button>
+      </div>
     `;
-
-    for (let i = 0; i < failedVideos.length; i++) {
-      const v = failedVideos[i];
-      const shortPath = (v.relPath ? v.relPath + '/' : '') + v.name;
-      const displayName = shortPath.length > 55 ? '...' + shortPath.substring(shortPath.length - 52) : shortPath;
-      html += `<div style="font-size:11px;opacity:0.75;padding-left:8px;">  ${i + 1}. ${displayName}</div>`;
-    }
-
-    html += '</div>';
-    return html;
   }
 
-  // ========== 一键重新打开失败视频 ==========
+  // ========== 重试失败视频 ==========
   function retryFailedVideos() {
-    const failedVideos = STATE.videos.filter(v => v.status === 'failed');
-    if (failedVideos.length === 0) return;
-
-    // 重置失败视频状态为 pending
-    for (const v of failedVideos) {
-      v.status = 'pending';
+    const failedIndices = [];
+    STATE.videos.forEach((v, i) => {
+      if (v.status === 'failed') failedIndices.push(i);
+    });
+    if (failedIndices.length === 0) {
+      log('没有失败的视频可重试');
+      return;
     }
+    // 重置失败视频状态
+    failedIndices.forEach(i => {
+      STATE.videos[i].status = 'pending';
+    });
     STATE.totalFailed = 0;
-
-    // 将失败视频重新排到队列前面
-    // 找到所有 pending 的视频，把失败的放前面
-    const stillPending = STATE.videos.filter(v => v.status === 'pending' && !failedVideos.includes(v));
-    const newOrder = [...failedVideos, ...stillPending];
-    // 重建 videos 数组：已完成的保持原位，新的 pending 排在后面
-    const completed = STATE.videos.filter(v => v.status !== 'pending');
-    STATE.videos = [...completed, ...newOrder];
-    STATE.currentIndex = completed.length;
-
-    // 如果批量导出已停止，重新启动
-    if (!STATE.enabled) {
-      STATE.enabled = true;
-      log(`🔁 重新打开 ${failedVideos.length} 个失败视频...`);
-      scheduleNext();
-      startPolling();
-    } else {
-      log(`🔁 将 ${failedVideos.length} 个失败视频加入队列...`);
-      scheduleNext();
-    }
+    STATE.currentIndex = failedIndices[0];
+    STATE.enabled = true;
+    STATE.paused = false;
+    log(`🔁 重试 ${failedIndices.length} 个失败视频`);
     updatePanel();
+    scheduleNext();
+    startPolling();
   }
 
-  // ========== PDF 下载：发送消息给 background，由它在页面主世界执行脚本 ==========
-  // 绕过 CSP 限制，background 使用 chrome.scripting.executeScript({world: 'MAIN'})
-  function triggerPDFDownload(fs_id) {
+  // ========== 发送下载文档消息给 background ==========
+  function triggerDocDownload(fs_id, filename) {
     return new Promise((resolve) => {
-      // 找到当前 PDF 信息
-      const pdf = STATE.pdfs.find(p => p.fs_id === fs_id);
-      const filename = pdf ? (pdf.relPath ? pdf.relPath + '/' + pdf.name : pdf.name) : 'unknown.pdf';
-
       log('  [调试] 请求下载: ' + filename);
-
       chrome.runtime.sendMessage(
         { action: 'downloadPDF', fs_id, filename },
         (response) => {
@@ -425,7 +560,7 @@
             return;
           }
           if (response?.ok) {
-            log('  [调试] 下载已触发');
+            log('  [调试] 下载已触发(id=' + response.downloadId + ')');
             resolve(true);
           } else {
             log('  [调试] 失败: ' + (response?.error || 'unknown') + (response?.debug ? ' (' + response.debug + ')' : ''));
@@ -436,88 +571,75 @@
     });
   }
 
-  // ========== 下载单个PDF（每个之间加延迟，避免浏览器合并下载请求）==========
-  async function downloadSinglePDF(pdfInfo, delayMs = 800) {
-    const { name, fs_id, relPath } = pdfInfo;
+  // ========== 下载单个文档 ==========
+  async function downloadSingleDoc(docInfo, delayMs = 1000) {
+    const { name, fs_id, relPath } = docInfo;
     const displayName = relPath ? relPath + '/' + name : name;
-    STATE.pdfCurrentName = displayName.length > 55 ? displayName.substring(0, 52) + '...' : displayName;
+    STATE.docsCurrentName = displayName.length > 55 ? displayName.substring(0, 52) + '...' : displayName;
     updatePanel();
 
-    const ok = await triggerPDFDownload(fs_id);
-    STATE.pdfCurrentName = '';
+    const ok = await triggerDocDownload(fs_id, displayName);
+    STATE.docsCurrentName = '';
     log((ok ? '✅ ' : '❌ ') + displayName);
 
-    // 每个文件之间加延迟，让浏览器有足够时间处理
+    // 串行下载，每个文件间隔延迟
     if (ok) {
       await new Promise(r => setTimeout(r, delayMs));
     }
     return ok;
   }
 
-  // ========== 批量下载PDF（限制并发数，避免触发反爬） ==========
-  // ========== PDF下载（自动扫描如果还未扫描） ==========
-  async function startPDFDownload() {
-    if (STATE.pdfMode === 'downloading') return;
+  // ========== 批量下载文档 ==========
+  async function startDocDownload() {
+    if (STATE.docMode === 'downloading') return;
 
     // 如果还没扫描，先扫描
     if (STATE.scanStats.totalDirs === 0) {
       await doScan();
     }
 
-    if (STATE.pdfs.length === 0) {
-      log('❌ 没有可下载的PDF文档，请先扫描目录');
+    if (STATE.docs.length === 0) {
+      log('❌ 没有可下载的文档，请先扫描或选择文件类型');
+      updatePanel();
       return;
     }
 
-    STATE.pdfMode = 'downloading';
-    STATE.pdfsDone = 0;
-    STATE.pdfsFailed = 0;
-    STATE.pdfsFailList = [];
-    STATE.pdfCurrentName = '';
+    STATE.docMode = 'downloading';
+    STATE.docsDone = 0;
+    STATE.docsFailed = 0;
+    STATE.docsFailList = [];
+    STATE.docsCurrentName = '';
 
-    for (const pdf of STATE.pdfs) {
-      pdf.status = 'pending';
+    for (const doc of STATE.docs) {
+      doc.status = 'pending';
     }
 
-    const total = STATE.pdfs.length;
-    log(`📥 开始批量下载 ${total} 个PDF文档...`);
+    const total = STATE.docs.length;
+    log(`📥 开始批量下载 ${total} 个文档...`);
     updatePanel();
 
-    const concurrency = 1;  // 串行下载，每个之间有800ms延迟，避免浏览器合并请求
-    let index = 0;
-
-    async function downloadNext() {
-      while (index < total) {
-        const pdf = STATE.pdfs[index];
-        index++;
-
-        const success = await downloadSinglePDF(pdf);
-        if (success) {
-          pdf.status = 'done';
-          STATE.pdfsDone++;
-        } else {
-          pdf.status = 'failed';
-          STATE.pdfsFailed++;
-          const failName = (pdf.relPath ? pdf.relPath + '/' : '') + pdf.name;
-          STATE.pdfsFailList.push(failName);
-        }
-        updatePanel();
+    // 串行下载
+    for (let i = 0; i < total; i++) {
+      const doc = STATE.docs[i];
+      const ok = await downloadSingleDoc(doc, 1000);
+      if (ok) {
+        doc.status = 'done';
+        STATE.docsDone++;
+      } else {
+        doc.status = 'failed';
+        STATE.docsFailed++;
+        const failName = (doc.relPath ? doc.relPath + '/' : '') + doc.name;
+        STATE.docsFailList.push(failName);
       }
+      updatePanel();
     }
 
-    const workers = [];
-    for (let i = 0; i < concurrency; i++) {
-      workers.push(downloadNext());
-    }
-
-    await Promise.all(workers);
-
-    STATE.pdfMode = 'done';
-    STATE.pdfCurrentName = '';
-    if (STATE.pdfsFailed > 0) {
-      log(`📥 PDF下载完成: 成功 ${STATE.pdfsDone}/${total}，失败 ${STATE.pdfsFailed}`);
+    STATE.docMode = 'done';
+    STATE.docsCurrentName = '';
+    if (STATE.docsFailed > 0) {
+      log(`📥 文档下载完成: 成功 ${STATE.docsDone}/${total}，失败 ${STATE.docsFailed}`);
     } else {
-      log(`🎉 全部PDF下载完成！共 ${STATE.pdfsDone} 个`);
+      log(`🎉 全部文档下载完成！共 ${STATE.docsDone} 个`);
     }
     updatePanel();
   }
@@ -532,23 +654,6 @@
     return '';
   }
 
-  // ========== 获取文件扩展名 ==========
-  function getExt(filename) {
-    const idx = filename.lastIndexOf('.');
-    return idx >= 0 ? filename.substring(idx + 1).toLowerCase() : '';
-  }
-
-  // ========== 判断是否是视频文件 ==========
-  function isVideoFile(filename) {
-    const ext = getExt(filename);
-    return ['mp4', 'm4v', 'mkv', 'avi', 'mov', 'flv', 'wmv', 'webm', 'm4a'].includes(ext);
-  }
-
-  // ========== 判断是否是PDF文件 ==========
-  function isPDFFile(filename) {
-    return getExt(filename) === 'pdf';
-  }
-
   // ========== 调用百度网盘 API 列出目录内容（支持分页 + 重试） ==========
   async function listDir(dirPath) {
     const maxRetries = 3;
@@ -558,7 +663,7 @@
       try {
         const allItems = [];
         let page = 1;
-        const num = 200; // 每页最多200条
+        const num = 100; // 每页100条
         let hasMore = true;
 
         while (hasMore) {
@@ -567,18 +672,15 @@
           if (data.errno !== 0) {
             lastError = `errno=${data.errno}`;
             console.error(`[批量导出] API错误 (${dirPath} page=${page}): errno=${data.errno}`);
-            // 如果是第一页就出错，认为是目录访问失败
             if (page === 1) {
               hasMore = false;
               break;
             }
-            // 后续页出错，用已有数据
             hasMore = false;
             break;
           }
           const items = data.list || [];
           allItems.push(...items);
-          // 如果返回数量小于 num，说明没有更多了
           hasMore = items.length === num;
           page++;
         }
@@ -587,40 +689,26 @@
         const dirs = [];
         for (const item of allItems) {
           if (item.isdir === 1 || item.isdir === true) {
-            dirs.push({
-              name: item.server_filename,
-              path: item.path,
-              fs_id: item.fs_id,
-            });
+            dirs.push({ name: item.server_filename, path: item.path, fs_id: item.fs_id });
           } else {
-            files.push({
-              name: item.server_filename,
-              path: item.path,
-              fs_id: item.fs_id,
-              size: item.size,
-            });
+            files.push({ name: item.server_filename, path: item.path, fs_id: item.fs_id, size: item.size });
           }
         }
         return { files, dirs, error: null };
       } catch (e) {
         lastError = e.message;
-        console.error(`[批量导出] 列出目录失败 (${dirPath} attempt=${attempt + 1}):`, e.message);
-        // 等待 1 秒后重试
-        if (attempt < maxRetries - 1) {
-          await new Promise(r => setTimeout(r, 1000));
-        }
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
       }
     }
-
     return { files: [], dirs: [], error: lastError };
   }
 
-  // ========== 递归扫描所有子目录，收集视频文件 ==========
+  // ========== 优化后的递归扫描（并行获取子目录） ==========
   async function scanAllVideos(rootPath) {
     const allVideos = [];
-    const visited = new Set();  // 防止循环引用
+    const visited = new Set();
     const stats = STATE.scanStats;
-    // 重置统计
+
     stats.totalDirs = 0;
     stats.totalFiles = 0;
     stats.totalVideos = 0;
@@ -629,34 +717,30 @@
     stats.nonVideoFiles = [];
     stats.dirDetails = [];
 
-    async function scan(dirPath, depth) {
-      if (visited.has(dirPath)) {
-        console.log(`[批量导出] 跳过已访问目录: ${dirPath}`);
-        return;
-      }
+    // 并行扫描目录（批量控制并发数）
+    const PARALLEL_BATCH = 5; // 每批并行5个目录
+
+    async function scan(dirPath) {
+      if (visited.has(dirPath)) return;
       visited.add(dirPath);
       stats.totalDirs++;
 
       const shortDir = dirPath.length > 50 ? '...' + dirPath.substring(dirPath.length - 47) : dirPath;
-      STATE.scanProgress = `扫描第${stats.totalDirs}个目录 (已找到${stats.totalVideos}个视频): ${shortDir}`;
+      STATE.scanProgress = `扫描${stats.totalDirs}个目录 (${stats.totalVideos}视频/${stats.totalFiles}文件): ${shortDir}`;
       updatePanel();
 
       const result = await listDir(dirPath);
       const { files, dirs, error } = result;
 
-      // 记录目录详情
       const dirDetail = {
-        path: dirPath,
-        totalFiles: files.length,
-        videos: 0,
-        nonVideos: 0,
-        nonVideoNames: [],
+        path: dirPath, totalFiles: files.length,
+        videos: 0, nonVideos: 0, nonVideoNames: [],
       };
 
       if (error) {
         stats.failedDirs.push({ path: dirPath, error, retries: 3 });
         stats.dirDetails.push(dirDetail);
-        return; // 跳过此目录
+        return;
       }
 
       // 计算相对路径
@@ -673,65 +757,42 @@
         const ext = getExt(f.name);
 
         if (isVideoFile(f.name)) {
-          // 视频文件
           if (ext === 'mp4') {
-            // 只有 .mp4 才加入导出队列（其他格式百度网盘不一定能播）
-            allVideos.push({
-              name: f.name,
-              path: f.path,
-              fs_id: f.fs_id,
-              relPath: relPath,
-              status: 'pending',
-            });
+            allVideos.push({ name: f.name, path: f.path, fs_id: f.fs_id, relPath, status: 'pending' });
             stats.totalVideos++;
             dirDetail.videos++;
           } else {
-            // 其他视频格式（m4v, mkv 等），也计入视频统计但不导出
             stats.totalVideos++;
             dirDetail.videos++;
-            stats.nonVideoFiles.push({
-              name: f.name,
-              dir: relPath || '(根目录)',
-              ext: ext,
-            });
+            stats.nonVideoFiles.push({ name: f.name, dir: relPath || '(根目录)', ext, fs_id: f.fs_id, size: f.size });
             dirDetail.nonVideoNames.push(f.name);
             dirDetail.nonVideos++;
             stats.totalNonVideos++;
           }
         } else {
-          // 非视频文件
-          stats.totalNonVideos++;
+          // 非视频文件 → 收集到 nonVideoFiles，后续按选中类型筛选为文档
+          stats.nonVideoFiles.push({ name: f.name, dir: relPath || '(根目录)', ext, fs_id: f.fs_id, size: f.size });
           dirDetail.nonVideos++;
           dirDetail.nonVideoNames.push(f.name);
-          stats.nonVideoFiles.push({
-            name: f.name,
-            dir: relPath || '(根目录)',
-            ext: ext,
-          });
-        }
-
-        // 收集PDF文件（独立于视频统计）
-        if (isPDFFile(f.name)) {
-          STATE.pdfs.push({
-            name: f.name,
-            path: f.path,
-            fs_id: f.fs_id,
-            relPath: relPath,
-            size: f.size || 0,
-            status: 'pending',
-          });
+          stats.totalNonVideos++;
         }
       }
 
       stats.dirDetails.push(dirDetail);
 
-      // 递归扫描子目录
-      for (const d of dirs) {
-        await scan(d.path, depth + 1);
+      // 收集子目录用于并行扫描
+      if (dirs.length > 0) {
+        const subQueue = dirs.map(d => d.path);
+
+        // 分批并行处理子目录
+        for (let i = 0; i < subQueue.length; i += PARALLEL_BATCH) {
+          const batch = subQueue.slice(i, i + PARALLEL_BATCH);
+          await Promise.all(batch.map(p => scan(p)));
+        }
       }
     }
 
-    await scan(rootPath, 0);
+    await scan(rootPath);
     STATE.scanProgress = '';
     return allVideos;
   }
@@ -741,15 +802,10 @@
     const video = STATE.videos[videoIndex];
     if (!video) return false;
 
-    // 在 URL 中附带 relPath 参数，content.js 读取后用于构建下载路径
     const url = `https://pan.baidu.com/pfile/video?path=${encodeURIComponent(video.path)}&fid=${video.fs_id}&relPath=${encodeURIComponent(video.relPath || '')}`;
     const newWin = window.open(url, '_blank');
     if (newWin) {
-      STATE.activeTabs.push({
-        win: newWin,
-        videoIndex: videoIndex,
-        openedAt: Date.now(),
-      });
+      STATE.activeTabs.push({ win: newWin, videoIndex, openedAt: Date.now() });
       video.status = 'opened';
       log(`📂 打开: ${video.relPath ? video.relPath + '/' : ''}${video.name}`);
       return true;
@@ -765,12 +821,9 @@
   window.addEventListener('message', (event) => {
     if (!event.data || event.data.type !== 'subtitle_export_result') return;
     const { status, url } = event.data;
-    // 根据 URL 匹配视频
     const tab = STATE.activeTabs.find(t => {
       const v = STATE.videos[t.videoIndex];
-      if (!v) return false;
-      // 用 path 和 fs_id 匹配
-      return url.includes(`fid=${v.fs_id}`) || url.includes(`path=${encodeURIComponent(v.path)}`);
+      return v && (url.includes(`fid=${v.fs_id}`) || url.includes(`path=${encodeURIComponent(v.path)}`));
     });
     if (!tab) return;
     const v = STATE.videos[tab.videoIndex];
@@ -806,16 +859,10 @@
         try {
           if (t.win.closed) {
             const v = STATE.videos[t.videoIndex];
-            if (v) {
-              // 如果状态还是 'opened'，说明没收到 postMessage
-              // 可能是成功关闭但消息没送达，也可能是失败关闭
-              // 此时保守处理：标记为 done（大多数情况是成功的）
-              if (v.status === 'opened') {
-                v.status = 'done';
-                STATE.totalDone++;
-                log(`✅ 完成: ${v.name}`);
-              }
-              // 如果已经是 done/failed/skip，说明 postMessage 已处理过，不用重复计数
+            if (v && v.status === 'opened') {
+              v.status = 'done';
+              STATE.totalDone++;
+              log(`✅ 完成: ${v.name}`);
             }
           } else {
             stillOpen.push(t);
@@ -840,11 +887,16 @@
 
       STATE.activeTabs = stillOpen;
       updatePanel();
-      scheduleNext();
+
+      // 只有未暂停时才继续调度
+      if (!STATE.paused) {
+        scheduleNext();
+      }
 
       if (STATE.currentIndex >= STATE.videos.length && STATE.activeTabs.length === 0) {
         log(`🎉 全部完成！导出 ${STATE.totalDone} 个，失败 ${STATE.totalFailed} 个，跳过 ${STATE.totalSkip} 个`);
         STATE.enabled = false;
+        STATE.paused = false;
         stopPolling();
         updatePanel();
       }
@@ -858,10 +910,13 @@
     }
   }
 
+  // ========== 调度下一个视频 ==========
   function scheduleNext() {
-    if (!STATE.enabled) return;
+    if (!STATE.enabled || STATE.paused) return;
+    // 使用用户设置的并发数
+    STATE.maxConcurrent = STATE.userConcurrency;
     while (STATE.activeTabs.length < STATE.maxConcurrent && STATE.currentIndex < STATE.videos.length) {
-      const ok = openVideoTab(STATE.currentIndex);
+      openVideoTab(STATE.currentIndex);
       STATE.currentIndex++;
     }
     updatePanel();
@@ -882,19 +937,21 @@
     STATE.rootDir = currentDir;
     STATE.scanning = true;
     STATE.videos = [];
-    STATE.pdfs = [];
+    STATE.docs = [];
     STATE.currentIndex = 0;
     STATE.activeTabs = [];
     STATE.totalDone = 0;
     STATE.totalSkip = 0;
     STATE.totalFailed = 0;
     STATE.enabled = false;
-    STATE.pdfMode = 'idle';
-    STATE.pdfsDone = 0;
-    STATE.pdfsFailed = 0;
-    STATE.pdfsFailList = [];
-    STATE.pdfCurrentName = '';
+    STATE.paused = false;
+    STATE.docMode = 'idle';
+    STATE.docsDone = 0;
+    STATE.docsFailed = 0;
+    STATE.docsFailList = [];
+    STATE.docsCurrentName = '';
     STATE.showDetails = false;
+    STATE.showDocTypes = false;
 
     log(`📋 开始递归扫描: ${currentDir}`);
     updatePanel();
@@ -902,7 +959,6 @@
     const videos = await scanAllVideos(currentDir);
     STATE.scanning = false;
 
-    // 按路径排序
     videos.sort((a, b) => {
       const pa = (a.relPath + '/' + a.name).toLowerCase();
       const pb = (b.relPath + '/' + b.name).toLowerCase();
@@ -910,16 +966,30 @@
     });
     STATE.videos = videos;
 
-    const pdfCount = STATE.pdfs.length;
-    log(`🔍 扫描完成：${STATE.scanStats.totalDirs}个目录, ${STATE.scanStats.totalFiles}个文件, ${STATE.scanStats.totalVideos}个视频, ${pdfCount}个PDF`);
+    // 扫描完成后，根据选中类型收集文档
+    const docs = [];
+    for (const f of STATE.scanStats.nonVideoFiles) {
+      if (STATE.selectedDocTypes.has(f.ext)) {
+        docs.push({
+          name: f.name, path: f.path, fs_id: f.fs_id,
+          relPath: f.dir === '(根目录)' ? '' : f.dir,
+          size: f.size || 0, status: 'pending', ext: f.ext,
+        });
+      }
+    }
+    STATE.docs = docs;
+    STATE.docsTotal = docs.length;
 
-    if (STATE.scanStats.totalVideos === 0 && pdfCount === 0) {
-      log('❌ 未找到任何视频或PDF文件');
+    const docCount = STATE.docs.length;
+    log(`🔍 扫描完成：${STATE.scanStats.totalDirs}个目录, ${STATE.scanStats.totalFiles}个文件, ${STATE.scanStats.totalVideos}个视频, ${docCount}个文档`);
+
+    if (STATE.scanStats.totalVideos === 0 && docCount === 0) {
+      log('❌ 未找到任何视频或文档文件');
     }
     updatePanel();
   }
 
-  // ========== 视频字幕导出开关 ==========
+  // ========== 视频字幕导出开关（暂停/继续） ==========
   function toggleVideoExport() {
     const videoCount = STATE.videos.length;
     if (videoCount === 0) {
@@ -928,12 +998,20 @@
     }
 
     if (STATE.enabled) {
-      STATE.enabled = false;
-      stopPolling();
-      log('⏹ 视频字幕导出已停止');
+      // 正在运行 → 切换暂停/继续
+      STATE.paused = !STATE.paused;
+      if (STATE.paused) {
+        log('⏸ 导出已暂停（标签页保持打开）');
+      } else {
+        log('▶ 继续导出');
+        scheduleNext();
+        startPolling();
+      }
       updatePanel();
     } else {
+      // 未运行 → 启动
       STATE.enabled = true;
+      STATE.paused = false;
       STATE.currentIndex = 0;
       STATE.activeTabs = [];
       STATE.totalDone = 0;
@@ -944,7 +1022,7 @@
         v.status = 'pending';
       }
 
-      log(`🎬 开始导出视频字幕: ${videoCount} 个视频`);
+      log(`🎬 开始导出视频字幕: ${videoCount} 个视频（并发${STATE.userConcurrency}）`);
       updatePanel();
       scheduleNext();
       startPolling();
