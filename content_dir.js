@@ -1017,9 +1017,7 @@
       return; // 全部调度完成
     }
     openVideoTab(STATE.currentIndex, () => {
-      STATE.currentIndex++;
       updatePanel();
-      // 立即调度下一个（仍然是单线程，但通过回调链持续直到达到并发上限）
       scheduleNext();
     });
   }
