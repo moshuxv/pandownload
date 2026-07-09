@@ -82,6 +82,96 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // === PDF 下载：在页面主世界执行脚本获取直链并触发下载（绕过 CSP）===
+  if (message.action === 'downloadPDF') {
+    const { fs_id, filename } = message;
+    const tabId = sender.tab?.id;
+
+    if (!tabId) {
+      sendResponse({ ok: false, error: 'no tab' });
+      return true;
+    }
+
+    console.log(`[PDF下载] 注入主世界脚本: ${filename} (fs_id=${fs_id})`);
+
+    // 在页面主世界执行代码，可以访问 yunData 和调用 API
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      world: 'MAIN',  // 关键：在页面主世界执行，可以访问页面全局变量
+      func: (fsId) => {
+        // 这个函数在页面主世界执行
+        return new Promise((resolve) => {
+          try {
+            // 获取 token
+            let bd = '';
+            if (typeof yunData !== 'undefined' && yunData) {
+              bd = yunData.MYBDSTOKEN || '';
+            }
+            if (!bd) {
+              const ck = document.cookie.match(/BDSTOKEN=([^;]+)/);
+              if (ck) bd = ck[1];
+            }
+            if (!bd) {
+              resolve({ ok: false, error: 'NO_BDSTOKEN' });
+              return;
+            }
+
+            // 调用 filemetas API 获取下载链接
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', `https://pan.baidu.com/api/filemetas?fsids=%5B${fsId}%5D&dlink=1&web=1&bdstoken=${bd}`, false);
+            xhr.withCredentials = true;
+            xhr.send();
+
+            if (xhr.status !== 200) {
+              resolve({ ok: false, error: `HTTP_${xhr.status}` });
+              return;
+            }
+
+            const data = JSON.parse(xhr.responseText);
+            if (data.errno !== 0) {
+              resolve({ ok: false, error: `ERRNO_${data.errno}` });
+              return;
+            }
+
+            const dlink = data.info?.[0]?.dlink;
+            if (!dlink) {
+              resolve({ ok: false, error: 'NO_DLINK' });
+              return;
+            }
+
+            // 触发下载
+            const a = document.createElement('a');
+            a.href = dlink;
+            a.download = '';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            resolve({ ok: true, dlink });
+          } catch (e) {
+            resolve({ ok: false, error: 'EXCEPTION:' + e.message });
+          }
+        });
+      },
+      args: [fs_id]
+    }).then((results) => {
+      const result = results?.[0]?.result;
+      if (result?.ok) {
+        console.log(`[PDF下载] 成功: ${filename}`);
+        sendResponse({ ok: true });
+      } else {
+        console.error(`[PDF下载] 失败: ${filename} - ${result?.error || 'unknown'}`);
+        sendResponse({ ok: false, error: result?.error || 'unknown' });
+      }
+    }).catch((err) => {
+      console.error(`[PDF下载] 注入失败: ${filename} - ${err.message}`);
+      sendResponse({ ok: false, error: err.message });
+    });
+
+    return true; // 保持通道开放
+  }
+
   return true;
 });
 

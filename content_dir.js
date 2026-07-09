@@ -406,100 +406,33 @@
     updatePanel();
   }
 
-  // ========== 注入脚本到页面主世界：拿token → 调filemetas API → 触发下载 ==========
-  // 直接用百度网盘页面自带的认证信息调用 filemetas 获取直链，
-  // 然后用 <a> 标签 click 触发浏览器下载（不走 window.open，避免弹窗拦截）
+  // ========== PDF 下载：发送消息给 background，由它在页面主世界执行脚本 ==========
+  // 绕过 CSP 限制，background 使用 chrome.scripting.executeScript({world: 'MAIN'})
   function triggerPDFDownload(fs_id) {
     return new Promise((resolve) => {
-      const key = '__pdf_r_' + Date.now();
-      const logKey = key + '_log';
+      // 找到当前 PDF 信息
+      const pdf = STATE.pdfs.find(p => p.fs_id === fs_id);
+      const filename = pdf ? (pdf.relPath ? pdf.relPath + '/' + pdf.name : pdf.name) : 'unknown.pdf';
 
-      const script = document.createElement('script');
-      script.textContent = `
-        (function() {
-          var dbg = [];
-          try {
-            // 第1步: 读取页面全局 token
-            var bd = '';
-            if (typeof yunData !== 'undefined' && yunData) {
-              bd = yunData.MYBDSTOKEN || '';
-              dbg.push('token_from_yunData');
-            }
-            if (!bd) {
-              var ck = document.cookie.match(/BDSTOKEN=([^;]+)/);
-              if (ck) { bd = ck[1]; dbg.push('token_from_cookie'); }
-            }
-            if (!bd) {
-              window['${key}'] = 'fail';
-              window['${logKey}'] = 'NO_BDSTOKEN';
-              return;
-            }
-            dbg.push('tk=' + bd.substring(0,6));
+      log('  [调试] 请求下载: ' + filename);
 
-            // 第2步: 调 filemetas 获取下载直链
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', 'https://pan.baidu.com/api/filemetas?fsids=%5B' + ${fs_id} + '%5D&dlink=1&web=1&bdstoken=' + bd, false);
-            xhr.withCredentials = true;
-            try { xhr.send(); } catch(e) { dbg.push('xhr_err=' + e.message); }
-
-            dbg.push('http=' + xhr.status);
-            var dlink = '';
-            if (xhr.status === 200) {
-              var data = JSON.parse(xhr.responseText);
-              dbg.push('errno=' + data.errno);
-              if (data.errno === 0 && data.info && data.info[0] && data.info[0].dlink) {
-                dlink = data.info[0].dlink;
-                dbg.push('dlink_ok');
-              }
-            }
-
-            if (!dlink) {
-              window['${key}'] = 'fail';
-              window['${logKey}'] = dbg.join('|') + '|NO_DLINK';
-              return;
-            }
-
-            // 第3步: <a> 标签触发下载（不会被弹窗拦截器拦截）
-            var a = document.createElement('a');
-            a.href = dlink;
-            a.download = '';
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            dbg.push('download_triggered');
-
-            window['${key}'] = 'ok';
-            window['${logKey}'] = dbg.join('|');
-          } catch(e) {
-            window['${key}'] = 'fail';
-            window['${logKey}'] = 'EXCEPTION:' + e.message;
+      chrome.runtime.sendMessage(
+        { action: 'downloadPDF', fs_id, filename },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            log('  [调试] 错误: ' + chrome.runtime.lastError.message);
+            resolve(false);
+            return;
           }
-        })();
-      `;
-      document.documentElement.appendChild(script);
-
-      let elapsed = 0;
-      const timer = setInterval(() => {
-        elapsed += 100;
-        if (window[key] !== undefined) {
-          clearInterval(timer);
-          const ok = window[key] === 'ok';
-          const dbg = window[logKey] || '';
-          delete window[key];
-          delete window[logKey];
-          script.remove();
-          log('  [调试] ' + dbg);
-          resolve(ok);
-        } else if (elapsed >= 15000) {
-          clearInterval(timer);
-          delete window[key];
-          delete window[logKey];
-          script.remove();
-          log('  [调试] 超时(15s)');
-          resolve(false);
+          if (response?.ok) {
+            log('  [调试] 下载已触发');
+            resolve(true);
+          } else {
+            log('  [调试] 失败: ' + (response?.error || 'unknown'));
+            resolve(false);
+          }
         }
-      }, 100);
+      );
     });
   }
 
