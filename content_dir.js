@@ -67,6 +67,7 @@
 
   // ========== 浮动控制面板 ==========
   let panelEl = null;
+  let panelInner = null;  // 内层可滚动容器
 
   function createPanel() {
     if (panelEl) return;
@@ -92,22 +93,17 @@
     `;
 
     // 内层容器：可滚动
-    let inner = panelEl.querySelector('#__batch_panel_inner__');
-    if (!inner) {
-      inner = document.createElement('div');
-      inner.id = '__batch_panel_inner__';
-      inner.style.cssText = `
+    if (!panelInner) {
+      panelInner = document.createElement('div');
+      panelInner.style.cssText = `
         height: 100%;
         padding: 14px 16px;
         overflow-y: auto;
         overflow-x: hidden;
         box-sizing: border-box;
       `;
-      panelEl.appendChild(inner);
+      panelEl.appendChild(panelInner);
     }
-
-    panelEl.innerHTML = '';
-    panelEl.appendChild(inner);
     document.documentElement.appendChild(panelEl);
     renderPanel();
   }
@@ -206,9 +202,9 @@
       html += `<div style="font-size:11px;opacity:0.6;">`;
       html += `🎬 ${STATE.totalDone}/${vc} &nbsp; 📄 ${STATE.docsDone}/${dc}`;
       html += `</div>`;
-      inner.innerHTML = html;
+      panelInner.innerHTML = html;
       panelEl.style.height = '56px';
-      const collapseBtn = inner.querySelector('#__batch_toggle_collapse__');
+      const collapseBtn = panelInner.querySelector('#__batch_toggle_collapse__');
       if (collapseBtn) collapseBtn.addEventListener('click', () => {
         STATE.collapsed = false;
         panelEl.style.height = '580px';
@@ -392,7 +388,7 @@
 
     html += `<div style="margin-top:8px;font-size:10px;opacity:0.4;">v3.2.1 · 固定窗口</div>`;
 
-    inner.innerHTML = html;
+    panelInner.innerHTML = html;
 
     // ===== 绑定事件 =====
     const scanBtn = panelEl.querySelector('#__batch_scan_btn__');
