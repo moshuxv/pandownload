@@ -7,6 +7,29 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // 接收 content script 消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // === 检查标签页是否存活 ===
+  if (message.action === 'checkTabs') {
+    const { tabIds } = message;
+    const aliveTabIds = [];
+    let checked = 0;
+    if (!tabIds || tabIds.length === 0) {
+      sendResponse({ aliveTabIds: [] });
+      return true;
+    }
+    for (const id of tabIds) {
+      chrome.tabs.get(id, (tab) => {
+        checked++;
+        if (!chrome.runtime.lastError && tab) {
+          aliveTabIds.push(id);
+        }
+        if (checked === tabIds.length) {
+          sendResponse({ aliveTabIds });
+        }
+      });
+    }
+    return true; // 保持通道开放
+  }
+
   // === 打开视频标签页（后台）===
   if (message.action === 'openVideoTab') {
     const { url } = message;

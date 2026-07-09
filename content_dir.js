@@ -928,72 +928,65 @@
     updatePanel();
   });
 
-  // ========== 轮询检测标签页关闭（通过 chrome.tabs.get 检查）==========
+  // ========== 轮询检测标签页关闭（通过 background.js 查询）==========
   function startPolling() {
     if (STATE.pollTimer) return;
-    STATE.pollTimer = setInterval(async () => {
+    STATE.pollTimer = setInterval(() => {
       if (!STATE.enabled) {
         stopPolling();
         return;
       }
 
-      const stillOpen = [];
-      for (const t of STATE.activeTabs) {
-        if (t.tabId) {
-          try {
-            await new Promise(resolve => {
-              chrome.tabs.get(t.tabId, (tab) => {
-                if (chrome.runtime.lastError || !tab) {
-                  // 标签页已关闭
-                  const v = STATE.videos[t.videoIndex];
-                  if (v && v.status === 'opened') {
-                    v.status = 'done';
-                    STATE.totalDone++;
-                    log(`✅ 完成: ${v.name}`);
-                  }
-                  resolve(false);
-                } else {
-                  stillOpen.push(t);
-                  resolve(true);
-                }
-              });
-            });
-          } catch (e) {
-            // 忽略错误
-          }
-        } else {
-          // 兼容旧版 win 对象
-          try {
-            if (t.win && t.win.closed) {
-              const v = STATE.videos[t.videoIndex];
-              if (v && v.status === 'opened') {
-                v.status = 'done';
-                STATE.totalDone++;
-                log(`✅ 完成: ${v.name}`);
-              }
-            } else {
-              stillOpen.push(t);
-            }
-          } catch (e) {
+      // 通过 background.js 检查哪些标签页还活着
+      const tabIds = STATE.activeTabs.map(t => t.tabId).filter(Boolean);
+      if (tabIds.length === 0) {
+        // 没有活跃标签页，直接调度下一个
+        if (!STATE.paused) scheduleNext();
+        if (STATE.currentIndex >= STATE.videos.length && STATE.activeTabs.length === 0) {
+          log(`🎉 全部完成！导出 ${STATE.totalDone} 个，失败 ${STATE.totalFailed} 个，跳过 ${STATE.totalSkip} 个`);
+          STATE.enabled = false;
+          STATE.paused = false;
+          stopPolling();
+          updatePanel();
+        }
+        return;
+      }
+
+      chrome.runtime.sendMessage({ action: 'checkTabs', tabIds }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('[BatchPanel] checkTabs 失败:', chrome.runtime.lastError.message);
+          return;
+        }
+        const aliveSet = new Set(response?.aliveTabIds || []);
+        const stillOpen = [];
+        for (const t of STATE.activeTabs) {
+          if (t.tabId && aliveSet.has(t.tabId)) {
             stillOpen.push(t);
+          } else {
+            // 标签页已关闭
+            const v = STATE.videos[t.videoIndex];
+            if (v && v.status === 'opened') {
+              v.status = 'done';
+              STATE.totalDone++;
+              log(`✅ 完成: ${v.name}`);
+            }
           }
         }
-      }
-
-      STATE.activeTabs = stillOpen;
-      updatePanel();
-
-      if (!STATE.paused) {
-        scheduleNext();
-      }
-
-      if (STATE.currentIndex >= STATE.videos.length && STATE.activeTabs.length === 0) {
-        log(`🎉 全部完成！导出 ${STATE.totalDone} 个，失败 ${STATE.totalFailed} 个，跳过 ${STATE.totalSkip} 个`);
-        STATE.enabled = false;
-        STATE.paused = false;
-        stopPolling();
+        STATE.activeTabs = stillOpen;
         updatePanel();
-      }
+
+        if (!STATE.paused) {
+          scheduleNext();
+        }
+
+        if (STATE.currentIndex >= STATE.videos.length && STATE.activeTabs.length === 0) {
+          log(`🎉 全部完成！导出 ${STATE.totalDone} 个，失败 ${STATE.totalFailed} 个，跳过 ${STATE.totalSkip} 个`);
+          STATE.enabled = false;
+          STATE.paused = false;
+          stopPolling();
+          updatePanel();
+        }
+      });
     }, 2000);
   }
 
