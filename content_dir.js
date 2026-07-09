@@ -406,8 +406,9 @@
     updatePanel();
   }
 
-  // ========== 注入脚本到页面主世界：拿token + 调API + 触发浏览器原生下载 ==========
-  // 不走 background.js，window.open 触发下载（和网页点下载一样）
+  // ========== 注入脚本到页面主世界：拿token → 调filemetas API → 触发下载 ==========
+  // 直接用百度网盘页面自带的认证信息调用 filemetas 获取直链，
+  // 然后用 <a> 标签 click 触发浏览器下载（不走 window.open，避免弹窗拦截）
   function triggerPDFDownload(fs_id) {
     return new Promise((resolve) => {
       const key = '__pdf_r_' + Date.now();
@@ -417,112 +418,63 @@
       script.textContent = `
         (function() {
           var dbg = [];
-          function done(ok, msg) {
-            window['${key}'] = ok ? 'ok' : 'fail';
-            window['${logKey}'] = ok ? dbg.join(' | ') : dbg.join(' | ') + ' || ' + msg;
-          }
-
-          function doDownload() {
-            try {
-              // 第1步: 获取页面认证数据
-              var bd = '', s1 = '', s3 = '', lid = '';
-
-              if (typeof yunData !== 'undefined' && yunData) {
-                bd = yunData.MYBDSTOKEN || '';
-                s1 = yunData.sign1 || '';
-                s3 = yunData.sign3 || '';
-                lid = yunData.LOGID || '';
-                dbg.push('yunData OK');
-              }
-
-              if (!bd) {
-                var ck = document.cookie.match(/BDSTOKEN=([^;]+)/);
-                if (ck) { bd = ck[1]; dbg.push('bdstoken from cookie'); }
-              }
-
-              if (!bd) {
-                dbg.push('NO bdstoken');
-                done(false, 'no token');
-                return;
-              }
-
-              dbg.push('token=' + bd.substring(0,8) + '... sign=' + (s1 ? 'yes' : 'no'));
-
-              // 第2步: 调用 download API
-              var sign = s1 + '_' + s3;
-              var ts = Math.floor(Date.now() / 1000);
-              var dlink = '';
-
-              var url1 = 'https://pan.baidu.com/api/download' +
-                '?app_id=250528&channel=chunlei&clienttype=0&web=1' +
-                '&bdstoken=' + bd +
-                '&fs_id=${fs_id}' +
-                '&sign=' + sign +
-                '&timestamp=' + ts +
-                '&logid=' + lid;
-
-              var xhr1 = new XMLHttpRequest();
-              xhr1.open('GET', url1, false);
-              xhr1.withCredentials = true;
-              xhr1.send();
-              dbg.push('download_api status=' + xhr1.status);
-
-              if (xhr1.status === 200) {
-                var j1 = JSON.parse(xhr1.responseText);
-                dbg.push('errno=' + j1.errno + ' dlink=' + (j1.dlink ? 'yes' : 'no'));
-                if (j1.errno === 0 && j1.dlink) {
-                  dlink = j1.dlink;
-                }
-              }
-
-              // 第3步: 备用 filemetas
-              if (!dlink) {
-                var url2 = 'https://pan.baidu.com/api/filemetas' +
-                  '?fsids=[${fs_id}]&dlink=1&web=1&bdstoken=' + bd;
-                var xhr2 = new XMLHttpRequest();
-                xhr2.open('GET', url2, false);
-                xhr2.withCredentials = true;
-                xhr2.send();
-
-                if (xhr2.status === 200) {
-                  var j2 = JSON.parse(xhr2.responseText);
-                  dbg.push('meta errno=' + j2.errno + ' dlink=' + (j2.info&&j2.info[0]&&j2.info[0].dlink ? 'yes' : 'no'));
-                  if (j2.errno === 0 && j2.info && j2.info[0] && j2.info[0].dlink) {
-                    dlink = j2.info[0].dlink;
-                  }
-                }
-              }
-
-              if (!dlink) {
-                dbg.push('NO dlink from both APIs');
-                done(false, 'no dlink');
-                return;
-              }
-
-              // 第4步: 触发浏览器下载（和网页点下载按钮一模一样的逻辑）
-              dbg.push('dlink OK');
-              var w = window.open(dlink, '_blank');
-              if (w) {
-                dbg.push('download via window.open');
-                setTimeout(function() { try { w.close(); } catch(e) {} }, 2000);
-              } else {
-                // popup blocked, fallback to iframe
-                var ifr = document.createElement('iframe');
-                ifr.style.cssText = 'display:none;width:0;height:0;';
-                ifr.src = dlink;
-                document.body.appendChild(ifr);
-                setTimeout(function() { ifr.remove(); }, 10000);
-                dbg.push('download via iframe');
-              }
-
-              done(true, '');
-
-            } catch(e) {
-              done(false, 'ex:' + e.message);
+          try {
+            // 第1步: 读取页面全局 token
+            var bd = '';
+            if (typeof yunData !== 'undefined' && yunData) {
+              bd = yunData.MYBDSTOKEN || '';
+              dbg.push('token_from_yunData');
             }
-          }
+            if (!bd) {
+              var ck = document.cookie.match(/BDSTOKEN=([^;]+)/);
+              if (ck) { bd = ck[1]; dbg.push('token_from_cookie'); }
+            }
+            if (!bd) {
+              window['${key}'] = 'fail';
+              window['${logKey}'] = 'NO_BDSTOKEN';
+              return;
+            }
+            dbg.push('tk=' + bd.substring(0,6));
 
-          doDownload();
+            // 第2步: 调 filemetas 获取下载直链
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', 'https://pan.baidu.com/api/filemetas?fsids=%5B' + ${fs_id} + '%5D&dlink=1&web=1&bdstoken=' + bd, false);
+            xhr.withCredentials = true;
+            try { xhr.send(); } catch(e) { dbg.push('xhr_err=' + e.message); }
+
+            dbg.push('http=' + xhr.status);
+            var dlink = '';
+            if (xhr.status === 200) {
+              var data = JSON.parse(xhr.responseText);
+              dbg.push('errno=' + data.errno);
+              if (data.errno === 0 && data.info && data.info[0] && data.info[0].dlink) {
+                dlink = data.info[0].dlink;
+                dbg.push('dlink_ok');
+              }
+            }
+
+            if (!dlink) {
+              window['${key}'] = 'fail';
+              window['${logKey}'] = dbg.join('|') + '|NO_DLINK';
+              return;
+            }
+
+            // 第3步: <a> 标签触发下载（不会被弹窗拦截器拦截）
+            var a = document.createElement('a');
+            a.href = dlink;
+            a.download = '';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            dbg.push('download_triggered');
+
+            window['${key}'] = 'ok';
+            window['${logKey}'] = dbg.join('|');
+          } catch(e) {
+            window['${key}'] = 'fail';
+            window['${logKey}'] = 'EXCEPTION:' + e.message;
+          }
         })();
       `;
       document.documentElement.appendChild(script);
