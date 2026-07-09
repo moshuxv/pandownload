@@ -867,9 +867,9 @@
   }
 
   // ========== 打开视频播放页（后台标签页，不切换焦点）==========
-  function openVideoTab(videoIndex) {
+  function openVideoTab(videoIndex, callback) {
     const video = STATE.videos[videoIndex];
-    if (!video) return false;
+    if (!video) { callback?.(); return; }
 
     const url = `https://pan.baidu.com/pfile/video?path=${encodeURIComponent(video.path)}&fid=${video.fs_id}&relPath=${encodeURIComponent(video.relPath || '')}`;
     console.log('[BatchPanel] openVideoTab, index:', videoIndex, 'url:', url);
@@ -882,6 +882,7 @@
         video.status = 'skip';
         STATE.totalSkip++;
         updatePanel();
+        callback?.();
         return;
       }
       if (response && response.ok && response.tabId) {
@@ -894,8 +895,9 @@
         STATE.totalSkip++;
         updatePanel();
       }
+      // 无论成功与否，都回调以触发下一个
+      callback?.();
     });
-    return true;
   }
 
   // ========== 接收视频页面的结果通知 ==========
@@ -1002,16 +1004,24 @@
     }
   }
 
-  // ========== 调度下一个视频 ==========
+  // ========== 调度下一个视频（回调驱动，等上一个打开后再调度下一个）==========
   function scheduleNext() {
     if (!STATE.enabled || STATE.paused) return;
-    // 使用用户设置的并发数
     STATE.maxConcurrent = STATE.userConcurrency;
-    while (STATE.activeTabs.length < STATE.maxConcurrent && STATE.currentIndex < STATE.videos.length) {
-      openVideoTab(STATE.currentIndex);
-      STATE.currentIndex++;
+    if (STATE.activeTabs.length >= STATE.maxConcurrent) {
+      updatePanel();
+      return; // 达到并发上限，等待标签页关闭后通过 poll 继续
     }
-    updatePanel();
+    if (STATE.currentIndex >= STATE.videos.length) {
+      updatePanel();
+      return; // 全部调度完成
+    }
+    openVideoTab(STATE.currentIndex, () => {
+      STATE.currentIndex++;
+      updatePanel();
+      // 立即调度下一个（仍然是单线程，但通过回调链持续直到达到并发上限）
+      scheduleNext();
+    });
   }
 
   // ========== 纯扫描（不启动导出，只收集文件列表） ==========
