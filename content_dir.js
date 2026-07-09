@@ -86,18 +86,13 @@
       font-family: -apple-system, "Microsoft YaHei", sans-serif;
       box-shadow: 0 6px 20px rgba(0,0,0,0.5);
       width: 420px;
-      min-height: 200px;
-      height: auto;
-      max-height: none;
-      overflow: hidden;
       line-height: 1.5;
     `;
 
-    // 内层容器：可滚动
+    // 内层容器：内容自适应高度，超出自动滚动
     if (!panelInner) {
       panelInner = document.createElement('div');
       panelInner.style.cssText = `
-        height: 100%;
         padding: 10px 12px;
         overflow-y: auto;
         overflow-x: hidden;
@@ -215,7 +210,7 @@
     }
 
     // 展开时恢复正常高度
-    panelEl.style.height = '480px';
+    panelEl.style.height = 'auto';
 
     // 扫描按钮行
     html += `<div style="margin-bottom:6px;">`;
