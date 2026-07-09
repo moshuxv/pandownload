@@ -379,7 +379,7 @@
       html += `<div style="margin-top:4px;font-size:11px;opacity:0.45;">点击"扫描目录"分析所有子文件夹</div>`;
     }
 
-    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.3</div>`;
+    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.4</div>`;
 
     panelInner.innerHTML = html;
 
