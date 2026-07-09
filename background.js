@@ -149,6 +149,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             // 调用 filemetas API 获取下载链接
+            console.log('[PDF下载] token来源: ' + tokenSource + ', tk=' + bd.substring(0, 6));
             const xhr = new XMLHttpRequest();
             xhr.open('GET', `https://pan.baidu.com/api/filemetas?fsids=%5B${fsId}%5D&dlink=1&web=1&bdstoken=${bd}`, false);
             xhr.withCredentials = true;
