@@ -247,7 +247,7 @@
         html += `</div>`;
       }
 
-      html += `<button id="__batch_video_btn__" style="
+      html += `<button id="__batch_video_btn__" onclick="window.__toggleVideoExport && window.__toggleVideoExport()" style="
         background:${videoBtnColor};color:#fff;border:none;padding:6px 12px;
         border-radius:5px;font-size:13px;font-weight:bold;cursor:pointer;width:100%;
       ">${videoBtnText}</button>`;
@@ -379,7 +379,7 @@
       html += `<div style="margin-top:4px;font-size:11px;opacity:0.45;">点击"扫描目录"分析所有子文件夹</div>`;
     }
 
-    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.4</div>`;
+    html += `<div style="margin-top:5px;font-size:10px;opacity:0.3;">v3.2.5</div>`;
 
     panelInner.innerHTML = html;
 
@@ -391,7 +391,7 @@
     });
 
     const videoBtn = panelEl.querySelector('#__batch_video_btn__');
-    if (videoBtn) videoBtn.addEventListener('click', toggleVideoExport);
+    if (videoBtn) videoBtn.addEventListener('click', window.__toggleVideoExport);
 
     const docBtn = panelEl.querySelector('#__batch_doc_btn__');
     if (docBtn) docBtn.addEventListener('click', startDocDownload);
@@ -1070,7 +1070,7 @@
   }
 
   // ========== 视频字幕导出开关（暂停/继续） ==========
-  function toggleVideoExport() {
+  window.__toggleVideoExport = function toggleVideoExport() {
     const videoCount = STATE.videos.length;
     if (videoCount === 0) {
       log('❌ 未找到任何视频文件，请先扫描目录');
