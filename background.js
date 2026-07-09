@@ -172,30 +172,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               return;
             }
 
-            // 触发下载
-            const a = document.createElement('a');
-            a.href = dlink;
-            a.download = '';
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-
-            resolve({ ok: true, dlink });
+            // 返回下载直链给 background，由 background 用 chrome.downloads.download() 处理
+            resolve({ ok: true, dlink, bd, tokenSource });
           } catch (e) {
             resolve({ ok: false, error: 'EXCEPTION:' + e.message });
           }
         });
       },
       args: [fs_id]
-    }).then((results) => {
+    }).then(async (results) => {
       const result = results?.[0]?.result;
-      if (result?.ok) {
-        console.log(`[PDF下载] 成功: ${filename}`);
-        sendResponse({ ok: true });
-      } else {
-        console.error(`[PDF下载] 失败: ${filename} - ${result?.error || 'unknown'}`);
+      if (!result?.ok) {
+        console.error(`[PDF下载] 失败: ${filename} - ${result?.error || 'unknown'} (${result?.debug || ''})`);
         sendResponse({ ok: false, error: result?.error || 'unknown', debug: result?.debug });
+        return;
+      }
+
+      // 使用 chrome.downloads.download() 触发下载，避免 <a> 点击被浏览器合并
+      try {
+        const saveFilename = filename; // 保持原文件名
+        const downloadId = await chrome.downloads.download({
+          url: result.dlink,
+          filename: saveFilename,
+          conflictAction: 'uniquify', // 文件名冲突时自动加序号
+          saveAs: false
+        });
+
+        if (downloadId) {
+          console.log(`[PDF下载] 成功: ${filename} (id=${downloadId}, token=${result.tokenSource})`);
+          sendResponse({ ok: true, downloadId });
+        } else {
+          console.error(`[PDF下载] 下载API失败: ${filename}`);
+          sendResponse({ ok: false, error: 'DOWNLOAD_API_FAILED' });
+        }
+      } catch (e) {
+        console.error(`[PDF下载] 下载异常: ${filename} - ${e.message}`);
+        sendResponse({ ok: false, error: e.message });
       }
     }).catch((err) => {
       console.error(`[PDF下载] 注入失败: ${filename} - ${err.message}`);

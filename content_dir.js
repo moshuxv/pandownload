@@ -436,8 +436,8 @@
     });
   }
 
-  // ========== 下载单个PDF ==========
-  async function downloadSinglePDF(pdfInfo) {
+  // ========== 下载单个PDF（每个之间加延迟，避免浏览器合并下载请求）==========
+  async function downloadSinglePDF(pdfInfo, delayMs = 800) {
     const { name, fs_id, relPath } = pdfInfo;
     const displayName = relPath ? relPath + '/' + name : name;
     STATE.pdfCurrentName = displayName.length > 55 ? displayName.substring(0, 52) + '...' : displayName;
@@ -446,6 +446,11 @@
     const ok = await triggerPDFDownload(fs_id);
     STATE.pdfCurrentName = '';
     log((ok ? '✅ ' : '❌ ') + displayName);
+
+    // 每个文件之间加延迟，让浏览器有足够时间处理
+    if (ok) {
+      await new Promise(r => setTimeout(r, delayMs));
+    }
     return ok;
   }
 
@@ -478,7 +483,7 @@
     log(`📥 开始批量下载 ${total} 个PDF文档...`);
     updatePanel();
 
-    const concurrency = 3;
+    const concurrency = 1;  // 串行下载，每个之间有800ms延迟，避免浏览器合并请求
     let index = 0;
 
     async function downloadNext() {
