@@ -102,17 +102,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // 这个函数在页面主世界执行
         return new Promise((resolve) => {
           try {
-            // 获取 token
+            // 获取 token - 尝试多种方式
             let bd = '';
+            let tokenSource = '';
+
+            // 方式1: yunData.MYBDSTOKEN
             if (typeof yunData !== 'undefined' && yunData) {
-              bd = yunData.MYBDSTOKEN || '';
+              bd = yunData.MYBDSTOKEN || yunData.bdstoken || '';
+              if (bd) tokenSource = 'yunData';
             }
+
+            // 方式2: document.cookie
             if (!bd) {
-              const ck = document.cookie.match(/BDSTOKEN=([^;]+)/);
-              if (ck) bd = ck[1];
+              const ck = document.cookie.match(/BDSTOKEN=([^;]+)/i);
+              if (ck) {
+                bd = ck[1];
+                tokenSource = 'cookie';
+              }
             }
+
+            // 方式3: localStorage
             if (!bd) {
-              resolve({ ok: false, error: 'NO_BDSTOKEN' });
+              try {
+                bd = localStorage.getItem('bdstoken') || '';
+                if (bd) tokenSource = 'localStorage';
+              } catch (e) {}
+            }
+
+            // 方式4: 从页面脚本标签中查找
+            if (!bd) {
+              const scripts = document.querySelectorAll('script');
+              for (const s of scripts) {
+                const text = s.textContent || '';
+                const match = text.match(/bdstoken["']?\s*[:=]\s*["']?([a-f0-9]{32})/i);
+                if (match) {
+                  bd = match[1];
+                  tokenSource = 'script';
+                  break;
+                }
+              }
+            }
+
+            if (!bd) {
+              resolve({ ok: false, error: 'NO_BDSTOKEN', debug: 'yunData=' + (typeof yunData) + ',cookie=' + document.cookie.includes('BDSTOKEN') });
               return;
             }
 
@@ -162,7 +194,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
       } else {
         console.error(`[PDF下载] 失败: ${filename} - ${result?.error || 'unknown'}`);
-        sendResponse({ ok: false, error: result?.error || 'unknown' });
+        sendResponse({ ok: false, error: result?.error || 'unknown', debug: result?.debug });
       }
     }).catch((err) => {
       console.error(`[PDF下载] 注入失败: ${filename} - ${err.message}`);

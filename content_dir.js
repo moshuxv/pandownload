@@ -428,7 +428,7 @@
             log('  [调试] 下载已触发');
             resolve(true);
           } else {
-            log('  [调试] 失败: ' + (response?.error || 'unknown'));
+            log('  [调试] 失败: ' + (response?.error || 'unknown') + (response?.debug ? ' (' + response.debug + ')' : ''));
             resolve(false);
           }
         }
