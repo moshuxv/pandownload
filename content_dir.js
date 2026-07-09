@@ -1114,7 +1114,7 @@
         v.status = 'pending';
       }
 
-      log(`🎬 开始导出视频字幕: ${videoCount} 个视频（并发${STATE.userConcurrency}）`);
+      log(`🎬 开始导出视频字幕: ${STATE.videos.length} 个视频（并发${STATE.userConcurrency}）`);
       updatePanel();
       scheduleNext();
       startPolling();
