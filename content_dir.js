@@ -874,10 +874,18 @@
     const url = `https://pan.baidu.com/pfile/video?path=${encodeURIComponent(video.path)}&fid=${video.fs_id}&relPath=${encodeURIComponent(video.relPath || '')}`;
     console.log('[BatchPanel] openVideoTab, index:', videoIndex, 'url:', url);
 
-    // 使用 chrome.tabs.create 在后台打开标签页，不切换焦点
-    chrome.tabs.create({ url, active: false }, (newTab) => {
-      if (newTab && !chrome.runtime.lastError) {
-        STATE.activeTabs.push({ tabId: newTab.id, videoIndex, openedAt: Date.now() });
+    // 通过 background.js 创建标签页（content script 无法直接调用 chrome.tabs.create）
+    chrome.runtime.sendMessage({ action: 'openVideoTab', url }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[BatchPanel] 打开标签页失败:', chrome.runtime.lastError.message);
+        log(`❌ 无法打开标签页: ${video.name}`);
+        video.status = 'skip';
+        STATE.totalSkip++;
+        updatePanel();
+        return;
+      }
+      if (response && response.ok && response.tabId) {
+        STATE.activeTabs.push({ tabId: response.tabId, videoIndex, openedAt: Date.now() });
         video.status = 'opened';
         log(`📂 打开: ${video.relPath ? video.relPath + '/' : ''}${video.name}`);
       } else {

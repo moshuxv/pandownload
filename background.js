@@ -7,6 +7,24 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // 接收 content script 消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // === 打开视频标签页（后台）===
+  if (message.action === 'openVideoTab') {
+    const { url } = message;
+    console.log('[字幕自动导出] 打开视频标签页:', url.substring(0, 100));
+    chrome.tabs.create({ url, active: false }, (newTab) => {
+      if (chrome.runtime.lastError) {
+        console.error('[字幕自动导出] 打开标签页失败:', chrome.runtime.lastError.message);
+        sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+      } else if (newTab) {
+        console.log('[字幕自动导出] 标签页已打开:', newTab.id);
+        sendResponse({ ok: true, tabId: newTab.id });
+      } else {
+        sendResponse({ ok: false, error: 'no tab created' });
+      }
+    });
+    return true; // 保持通道开放
+  }
+
   // === 关闭标签页 ===
   if (message.action === 'closeTab' && sender.tab) {
     const tabId = sender.tab.id;
