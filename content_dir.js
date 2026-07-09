@@ -1,6 +1,6 @@
 // content_dir.js — 注入到百度网盘目录页
 // 在页面右上角添加批量控制面板，自动递归扫描所有子目录的视频/文档文件
-// v3.2: 并发数字按钮 + 后台标签页 + 折叠面板 + 多格式文档下载
+// v3.2.1: 固定窗口高度+折叠缩小+并发加减按钮实时生效
 
 (function () {
   'use strict';
@@ -79,16 +79,35 @@
       z-index: 2147483647;
       background: rgba(30, 30, 40, 0.97);
       color: #fff;
-      padding: 12px 16px;
+      padding: 0;
       border-radius: 10px;
       font-size: 13px;
       font-family: -apple-system, "Microsoft YaHei", sans-serif;
       box-shadow: 0 6px 20px rgba(0,0,0,0.5);
       width: 420px;
-      max-height: 80vh;
-      overflow-y: auto;
+      height: 580px;
+      max-height: none;
+      overflow: hidden;
       line-height: 1.6;
     `;
+
+    // 内层容器：可滚动
+    let inner = panelEl.querySelector('#__batch_panel_inner__');
+    if (!inner) {
+      inner = document.createElement('div');
+      inner.id = '__batch_panel_inner__';
+      inner.style.cssText = `
+        height: 100%;
+        padding: 14px 16px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        box-sizing: border-box;
+      `;
+      panelEl.appendChild(inner);
+    }
+
+    panelEl.innerHTML = '';
+    panelEl.appendChild(inner);
     document.documentElement.appendChild(panelEl);
     renderPanel();
   }
@@ -187,11 +206,19 @@
       html += `<div style="font-size:11px;opacity:0.6;">`;
       html += `🎬 ${STATE.totalDone}/${vc} &nbsp; 📄 ${STATE.docsDone}/${dc}`;
       html += `</div>`;
-      panelEl.innerHTML = html;
-      const collapseBtn = panelEl.querySelector('#__batch_toggle_collapse__');
-      if (collapseBtn) collapseBtn.addEventListener('click', () => { STATE.collapsed = false; updatePanel(); });
+      inner.innerHTML = html;
+      panelEl.style.height = '56px';
+      const collapseBtn = inner.querySelector('#__batch_toggle_collapse__');
+      if (collapseBtn) collapseBtn.addEventListener('click', () => {
+        STATE.collapsed = false;
+        panelEl.style.height = '580px';
+        updatePanel();
+      });
       return;
     }
+
+    // 展开时恢复正常高度
+    panelEl.style.height = '580px';
 
     // 扫描按钮行
     html += `<div style="margin-bottom:10px;">`;
@@ -217,24 +244,14 @@
       html += `<span style="font-size:12px;opacity:0.7;">${videoTotal} 个视频</span>`;
       html += `</div>`;
 
-      // 并发控制（数字按钮）
+      // 并发控制（加减按钮，实时生效）
       if (videoTotal > 0) {
-        html += `<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;font-size:11px;">`;
-        html += `<span style="opacity:0.7;margin-right:4px;">并发:</span>`;
-        for (let n = 1; n <= 10; n++) {
-          const active = STATE.userConcurrency === n;
-          html += `<button data-concurrency="${n}" style="
-            background:${active ? '#3498db' : 'rgba(255,255,255,0.1)'};
-            color:#fff;
-            border:1px solid ${active ? '#3498db' : 'rgba(255,255,255,0.2)'};
-            width:26px;height:26px;
-            border-radius:4px;
-            font-size:11px;
-            cursor:pointer;
-            padding:0;
-            line-height:1;
-          ">${n}</button>`;
-        }
+        html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:11px;">`;
+        html += `<span style="opacity:0.7;">并发:</span>`;
+        html += `<button id="__batch_conc_dec__" style="background:rgba(255,255,255,0.15);color:#fff;border:none;width:22px;height:22px;border-radius:4px;cursor:pointer;font-size:13px;line-height:1;padding:0;">−</button>`;
+        html += `<span id="__batch_conc_val__" style="min-width:20px;text-align:center;font-weight:bold;">${STATE.userConcurrency}</span>`;
+        html += `<button id="__batch_conc_inc__" style="background:rgba(255,255,255,0.15);color:#fff;border:none;width:22px;height:22px;border-radius:4px;cursor:pointer;font-size:13px;line-height:1;padding:0;">+</button>`;
+        html += `<span style="opacity:0.5;font-size:10px;margin-left:2px;">(1-10)</span>`;
         html += `</div>`;
       }
 
@@ -373,9 +390,9 @@
       html += `<div style="margin-top:6px;font-size:12px;opacity:0.5;">点击"扫描目录"分析当前文件夹及子文件夹中的所有文件</div>`;
     }
 
-    html += `<div style="margin-top:8px;font-size:10px;opacity:0.4;">v3.2 · 后台标签页 · 窗口可折叠</div>`;
+    html += `<div style="margin-top:8px;font-size:10px;opacity:0.4;">v3.2.1 · 固定窗口</div>`;
 
-    panelEl.innerHTML = html;
+    inner.innerHTML = html;
 
     // ===== 绑定事件 =====
     const scanBtn = panelEl.querySelector('#__batch_scan_btn__');
@@ -390,14 +407,35 @@
     const docBtn = panelEl.querySelector('#__batch_doc_btn__');
     if (docBtn) docBtn.addEventListener('click', startDocDownload);
 
-    // 并发数字按钮
-    panelEl.querySelectorAll('button[data-concurrency]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        STATE.userConcurrency = parseInt(btn.dataset.concurrency);
-        STATE.maxConcurrent = STATE.userConcurrency;
-        renderPanel();
+    // 并发加减按钮（实时生效）
+    const concVal = panelEl.querySelector('#__batch_conc_val__');
+    const concDec = panelEl.querySelector('#__batch_conc_dec__');
+    const concInc = panelEl.querySelector('#__batch_conc_inc__');
+
+    if (concDec && concInc && concVal) {
+      concDec.addEventListener('click', () => {
+        if (STATE.userConcurrency > 1) {
+          STATE.userConcurrency--;
+          STATE.maxConcurrent = STATE.userConcurrency;
+          renderPanel();
+          // 正在运行时立即触发调度
+          if (STATE.enabled && !STATE.paused) {
+            for (let i = 0; i < STATE.userConcurrency; i++) scheduleNext();
+          }
+        }
       });
-    });
+      concInc.addEventListener('click', () => {
+        if (STATE.userConcurrency < 10) {
+          STATE.userConcurrency++;
+          STATE.maxConcurrent = STATE.userConcurrency;
+          renderPanel();
+          // 正在运行时立即触发调度
+          if (STATE.enabled && !STATE.paused) {
+            for (let i = 0; i < STATE.userConcurrency; i++) scheduleNext();
+          }
+        }
+      });
+    }
     STATE.maxConcurrent = STATE.userConcurrency;
 
     const detailBtn = panelEl.querySelector('#__batch_toggle_details__');
