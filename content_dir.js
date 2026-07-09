@@ -1084,7 +1084,7 @@
       scanStats: STATE.scanStats,
       rootDir: STATE.rootDir,
     });
-    if (videoCount === 0) {
+    if (STATE.videos.length === 0) {
       log('❌ 未找到任何视频文件，请先扫描目录');
       return;
     }
